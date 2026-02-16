@@ -87,7 +87,19 @@ npm install
 ```bash
 # Create .env.local and add:
 JWT_SECRET=your-secret-key-here
+DATABASE_URL=mysql://username:password@host:port/database
+NODE_ENV=production
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=admin123
+DEFAULT_ADMIN_FULL_NAME=Administrator
+DEFAULT_ADMIN_ROLE=admin
 ```
+
+### Production-only DB behavior
+- In production (`NODE_ENV=production`), the app requires `DATABASE_URL`.
+- Production accepts only `mysql://` database URLs.
+- If `DATABASE_URL` is missing/invalid in production, the app will fail fast at startup.
+- On first run (empty `users` table), the app auto-creates the default user from `DEFAULT_ADMIN_*` env vars.
 
 4. Run the development server:
 ```bash
