@@ -9,10 +9,11 @@ import {
   CustomInventoryItem,
   CustomInventoryStockEntry,
 } from '@/lib/types';
-import { Plus } from 'lucide-react';
+import { Plus, Filter, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function SalesPage() {
   const [sales, setSales] = useState<SaleWithDetails[]>([]);
+  const [allPerfumes, setAllPerfumes] = useState<Perfume[]>([]);
   const [perfumes, setPerfumes] = useState<Perfume[]>([]);
   const [stocks, setStocks] = useState<StockWithDetails[]>([]);
   const [decantBottleItems, setDecantBottleItems] = useState<
@@ -23,9 +24,25 @@ export default function SalesPage() {
   const [selectedSale, setSelectedSale] = useState<SaleWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Filters
+  const [filterPerfume, setFilterPerfume] = useState('');
+  const [filterSaleType, setFilterSaleType] = useState<'' | 'full_bottle' | 'decant'>('');
+  const [filterMinAmount, setFilterMinAmount] = useState('');
+  const [filterMaxAmount, setFilterMaxAmount] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterPerfume, filterSaleType, filterMinAmount, filterMaxAmount]);
 
   const fetchData = async () => {
     try {
@@ -45,6 +62,7 @@ export default function SalesPage() {
       ]);
 
       setSales(salesData);
+      setAllPerfumes(perfumesData);
       setPerfumes(perfumesData.filter((p: Perfume) => (p.is_out_of_stock || 0) === 0));
       setStocks(stocksData.filter((s: StockWithDetails) => s.remaining_quantity > 0));
 
@@ -83,12 +101,110 @@ export default function SalesPage() {
     );
   }
 
+  // Apply filters
+  const filteredSales = sales.filter((sale) => {
+    // Perfume filter
+    if (filterPerfume) {
+      const perfumeId = Number(filterPerfume);
+      const hasMatch = sale.items.some((item) => Number(item.perfume_id) === perfumeId);
+      if (!hasMatch) return false;
+    }
+
+    // Sale type filter (full_bottle or decant)
+    if (filterSaleType) {
+      const hasMatch = sale.items.some((item) => item.sale_type === filterSaleType);
+      if (!hasMatch) return false;
+    }
+
+    // Amount range filter
+    const minAmt = parseFloat(filterMinAmount);
+    const maxAmt = parseFloat(filterMaxAmount);
+    if (!Number.isNaN(minAmt) && sale.total_amount < minAmt) return false;
+    if (!Number.isNaN(maxAmt) && sale.total_amount > maxAmt) return false;
+
+    return true;
+  });
+
+  const hasActiveFilters = filterPerfume || filterSaleType || filterMinAmount || filterMaxAmount;
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filteredSales.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedSales = filteredSales.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const startRow = filteredSales.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const endRow = Math.min(safePage * pageSize, filteredSales.length);
+
+  const clearFilters = () => {
+    setFilterPerfume('');
+    setFilterSaleType('');
+    setFilterMinAmount('');
+    setFilterMaxAmount('');
+    setCurrentPage(1);
+  };
+
+  // Collect unique perfume names from all sales for the filter (so we include historical perfumes that may no longer be in stock)
+  const perfumeOptionsForFilter = (() => {
+    const seen = new Map<number, string>();
+    for (const sale of sales) {
+      for (const item of sale.items) {
+        if (item.perfume_id && item.perfume_name && !seen.has(Number(item.perfume_id))) {
+          seen.set(Number(item.perfume_id), item.perfume_name);
+        }
+      }
+    }
+    // Also include from allPerfumes in case some have no sales yet
+    for (const p of allPerfumes) {
+      if (!seen.has(p.id)) {
+        seen.set(p.id, p.name);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   return (
     <DashboardLayout title="Sales Management">
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-gray-900">
-            Total Sales: <span className="font-semibold">{sales.length}</span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-900">
+              {hasActiveFilters ? (
+                <>
+                  Showing <span className="font-semibold">{filteredSales.length}</span> of{' '}
+                  <span className="font-semibold">{sales.length}</span> sales
+                </>
+              ) : (
+                <>
+                  Total Sales: <span className="font-semibold">{sales.length}</span>
+                </>
+              )}
+            </div>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                hasActiveFilters
+                  ? 'border-purple-300 bg-purple-50 text-purple-700'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Filter size={16} />
+              Filters
+              {hasActiveFilters && (
+                <span className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-purple-600 text-xs text-white">
+                  {[filterPerfume, filterSaleType, filterMinAmount || filterMaxAmount].filter(Boolean).length}
+                </span>
+              )}
+            </button>
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm text-gray-500 hover:text-gray-700"
+              >
+                <X size={14} />
+                Clear
+              </button>
+            )}
           </div>
           <button
             onClick={() => setShowSaleModal(true)}
@@ -98,6 +214,62 @@ export default function SalesPage() {
             <span>New Sale</span>
           </button>
         </div>
+
+        {showFilters && (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Perfume</label>
+                <select
+                  value={filterPerfume}
+                  onChange={(e) => setFilterPerfume(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="">All Perfumes</option>
+                  {perfumeOptionsForFilter.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Sale Type</label>
+                <select
+                  value={filterSaleType}
+                  onChange={(e) => setFilterSaleType(e.target.value as '' | 'full_bottle' | 'decant')}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="">All Types</option>
+                  <option value="full_bottle">Full Bottle</option>
+                  <option value="decant">Decant</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Min Amount (UGX)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterMinAmount}
+                  onChange={(e) => setFilterMinAmount(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Max Amount (UGX)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterMaxAmount}
+                  onChange={(e) => setFilterMaxAmount(e.target.value)}
+                  placeholder="No limit"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="overflow-hidden rounded-lg bg-white shadow">
           <div className="overflow-x-auto">
@@ -115,42 +287,127 @@ export default function SalesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {sales.map((sale) => (
-                  <tr key={sale.id}>
-                    <td className="px-6 py-4 text-sm text-gray-600">{sale.sale_date}</td>
-                    <td className="px-6 py-4 text-sm text-gray-900">{sale.customer_name || 'Walk-in'}</td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {sale.items.map((item, idx) => (
-                        <div key={idx}>
-                          {item.perfume_name} ({item.quantity} {item.sale_type === 'full_bottle' ? 'bottle(s)' : 'decant(s)'})
-                        </div>
-                      ))}
-                    </td>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">UGX {sale.total_amount.toLocaleString()}</td>
-                    <td className="px-6 py-4 text-sm text-green-600">UGX {sale.amount_paid.toLocaleString()}</td>
-                    <td className="px-6 py-4 text-sm">
-                      {sale.debt_amount > 0 ? (
-                        <span className="font-medium text-red-600">UGX {sale.debt_amount.toLocaleString()}</span>
-                      ) : (
-                        <span className="text-green-600">Paid</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{sale.payment_method}</td>
-                    <td className="px-6 py-4">
-                      {sale.debt_amount > 0 && (
-                        <button
-                          onClick={() => handlePayDebt(sale)}
-                          className="text-sm font-medium text-purple-600 hover:text-purple-700"
-                        >
-                          Pay Debt
-                        </button>
-                      )}
+                {paginatedSales.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-8 text-center text-sm text-gray-500">
+                      {hasActiveFilters ? 'No sales match the current filters.' : 'No sales recorded yet.'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedSales.map((sale) => (
+                    <tr key={sale.id}>
+                      <td className="px-6 py-4 text-sm text-gray-600">{sale.sale_date}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">{sale.customer_name || 'Walk-in'}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {sale.items.map((item, idx) => (
+                          <div key={idx}>
+                            {item.perfume_name} ({item.quantity} {item.sale_type === 'full_bottle' ? 'bottle(s)' : 'decant(s)'})
+                          </div>
+                        ))}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-900">UGX {sale.total_amount.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-sm text-green-600">UGX {sale.amount_paid.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-sm">
+                        {sale.debt_amount > 0 ? (
+                          <span className="font-medium text-red-600">UGX {sale.debt_amount.toLocaleString()}</span>
+                        ) : (
+                          <span className="text-green-600">Paid</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{sale.payment_method}</td>
+                      <td className="px-6 py-4">
+                        {sale.debt_amount > 0 && (
+                          <button
+                            onClick={() => handlePayDebt(sale)}
+                            className="text-sm font-medium text-purple-600 hover:text-purple-700"
+                          >
+                            Pay Debt
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {filteredSales.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-6 py-3">
+              <div className="flex items-center gap-3 text-sm text-gray-600">
+                <span>
+                  {startRow}–{endRow} of {filteredSales.length}
+                </span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-700"
+                >
+                  <option value={10}>10 / page</option>
+                  <option value={20}>20 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={safePage <= 1}
+                  className="rounded px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  className="rounded p-1 text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                {(() => {
+                  const pages: number[] = [];
+                  let start = Math.max(1, safePage - 2);
+                  let end = Math.min(totalPages, safePage + 2);
+                  if (end - start < 4) {
+                    start = Math.max(1, end - 4);
+                    end = Math.min(totalPages, start + 4);
+                  }
+                  for (let i = start; i <= end; i++) pages.push(i);
+                  return pages.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setCurrentPage(p)}
+                      className={`min-w-[32px] rounded px-2 py-1 text-sm font-medium ${
+                        p === safePage
+                          ? 'bg-purple-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ));
+                })()}
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                  className="rounded p-1 text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  <ChevronRight size={18} />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={safePage >= totalPages}
+                  className="rounded px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                >
+                  Last
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
