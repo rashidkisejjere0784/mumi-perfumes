@@ -36,16 +36,20 @@ export async function POST(request: NextRequest) {
       await db.prepare('DELETE FROM perfumes').run();
 
       // Reset autoincrement counters for wiped tables (users intentionally preserved).
-      await db.prepare(`
-        DELETE FROM sqlite_sequence
-        WHERE name IN (
-          'sale_items', 'debt_payments', 'sales', 'decant_bottle_logs',
-          'decant_tracking', 'deleted_bottles', 'stock_groups',
-          'stock_shipments', 'expenses', 'investments', 'perfumes',
-          'custom_inventory_stock_entries', 'custom_inventory_items',
-          'custom_inventory_categories'
-        )
-      `).run();
+      const tablesToReset = [
+        'sale_items', 'debt_payments', 'sales', 'decant_bottle_logs',
+        'decant_tracking', 'deleted_bottles', 'stock_groups',
+        'stock_shipments', 'expenses', 'investments', 'perfumes',
+        'custom_inventory_stock_entries', 'custom_inventory_items',
+        'custom_inventory_categories',
+      ];
+      for (const table of tablesToReset) {
+        try {
+          await db.exec(`ALTER TABLE ${table} AUTO_INCREMENT = 1`);
+        } catch (_) {
+          // Ignore errors (e.g. if table doesn't exist yet)
+        }
+      }
     });
 
     return NextResponse.json({ message: 'All business data cleared successfully. Users were preserved.' });

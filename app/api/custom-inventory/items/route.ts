@@ -120,7 +120,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(created, { status: 201 });
   } catch (error: any) {
     console.error('Error creating custom inventory item:', error);
-    if (String(error?.message || '').includes('UNIQUE')) {
+    const msg = String(error?.message || error?.code || '');
+    if (msg.includes('UNIQUE') || msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
       return NextResponse.json({ error: 'Item name already exists' }, { status: 400 });
     }
     return NextResponse.json({ error: 'Failed to create custom inventory item' }, { status: 500 });
@@ -177,7 +178,8 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json(updated);
   } catch (error: any) {
     console.error('Error updating custom inventory item:', error);
-    if (String(error?.message || '').includes('UNIQUE')) {
+    const msg = String(error?.message || error?.code || '');
+    if (msg.includes('UNIQUE') || msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
       return NextResponse.json({ error: 'Item name already exists' }, { status: 400 });
     }
     return NextResponse.json({ error: 'Failed to update custom inventory item' }, { status: 500 });

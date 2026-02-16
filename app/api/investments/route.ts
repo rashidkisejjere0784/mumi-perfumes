@@ -57,3 +57,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to create investment' }, { status: 500 });
   }
 }
+
+// DELETE investment (only manual investments can be deleted)
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ error: 'Investment ID is required' }, { status: 400 });
+    }
+
+    const db = getDatabase();
+    try {
+      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
+    } catch (_) {
+      // Column already exists
+    }
+
+    const investment = await db.prepare('SELECT id, source_shipment_id FROM investments WHERE id = ?').get(id) as {
+      id: number;
+      source_shipment_id: number | null;
+    } | undefined;
+
+    if (!investment) {
+      return NextResponse.json({ error: 'Investment not found' }, { status: 404 });
+    }
+
+    if (investment.source_shipment_id) {
+      return NextResponse.json(
+        { error: 'Cannot delete auto-generated investment linked to a shipment. Delete the shipment instead.' },
+        { status: 400 },
+      );
+    }
+
+    await db.prepare('DELETE FROM investments WHERE id = ?').run(id);
+    return NextResponse.json({ message: 'Investment deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting investment:', error);
+    return NextResponse.json({ error: 'Failed to delete investment' }, { status: 500 });
+  }
+}

@@ -79,7 +79,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(created, { status: 201 });
   } catch (error: any) {
     console.error('Error creating category:', error);
-    if (String(error?.message || '').includes('UNIQUE')) {
+    const msg = String(error?.message || error?.code || '');
+    if (msg.includes('UNIQUE') || msg.includes('Duplicate entry') || msg.includes('ER_DUP_ENTRY')) {
       return NextResponse.json({ error: 'Category already exists' }, { status: 400 });
     }
     return NextResponse.json({ error: 'Failed to create category' }, { status: 500 });

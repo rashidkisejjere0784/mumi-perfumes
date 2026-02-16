@@ -108,8 +108,13 @@ export async function GET(request: NextRequest) {
 
     const liquidCash = Number(salesData.cash_received || 0) - Number(expensesData.total || 0);
     const totalCapital = Number(manualInvestments.total || 0);
-    const totalInvestment = totalCapital + amountInvestedInStock;
-    const netProfit = liquidCash - totalCapital;
+    // Total Investment = all money put into stock (capital-funded + sales-funded).
+    // Using amountInvestedInStock directly avoids double-counting with totalCapital.
+    const totalInvestment = amountInvestedInStock;
+    // Gross Profit = Revenue from sales − Cost of Goods Sold
+    const grossProfit = profitFromSales;
+    // Net Profit = Gross Profit − Operating Expenses
+    const netProfit = profitFromSales - Number(expensesData.total || 0);
 
     const summary: FinancialSummary = {
       total_revenue: liquidCash,
@@ -121,7 +126,7 @@ export async function GET(request: NextRequest) {
       profit_from_sales: profitFromSales,
       cost_of_goods_sold: costOfGoodsSold,
       net_profit: netProfit,
-      gross_profit: Number(salesData.total || 0) - Number(expensesData.total || 0),
+      gross_profit: grossProfit,
       outstanding_debts: Number(debtData.total || 0),
       daily_income: Number(salesData.daily || 0),
       monthly_income: Number(salesData.monthly || 0),

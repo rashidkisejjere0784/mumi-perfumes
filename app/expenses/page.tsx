@@ -48,6 +48,22 @@ export default function ExpensesPage() {
     }
   };
 
+  const handleDeleteInvestment = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this investment?')) return;
+
+    try {
+      const response = await fetch(`/api/investments?id=${id}`, { method: 'DELETE' });
+      if (response.ok) {
+        fetchData();
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to delete investment');
+      }
+    } catch (error) {
+      console.error('Error deleting investment:', error);
+    }
+  };
+
   if (loading) {
     return (
       <DashboardLayout title="Expenses & Investments">
@@ -144,6 +160,7 @@ export default function ExpensesPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -153,6 +170,14 @@ export default function ExpensesPage() {
                     <td className="px-6 py-4 text-sm text-gray-900">{investment.description}</td>
                     <td className="px-6 py-4 text-sm font-medium text-gray-900">
                       UGX {investment.amount.toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={() => handleDeleteInvestment(investment.id)}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        <Trash2 size={18} />
+                      </button>
                     </td>
                   </tr>
                 ))}
