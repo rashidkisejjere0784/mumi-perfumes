@@ -33,14 +33,15 @@ export async function POST(request: NextRequest) {
       await db.prepare('DELETE FROM stock_shipments').run();
       await db.prepare('DELETE FROM expenses').run();
       await db.prepare('DELETE FROM investments').run();
+      await db.prepare('DELETE FROM cash_adjustments').run();
       await db.prepare('DELETE FROM perfumes').run();
 
       // Reset autoincrement counters for wiped tables (users intentionally preserved).
       const tablesToReset = [
         'sale_items', 'debt_payments', 'sales', 'decant_bottle_logs',
         'decant_tracking', 'deleted_bottles', 'stock_groups',
-        'stock_shipments', 'expenses', 'investments', 'perfumes',
-        'custom_inventory_stock_entries', 'custom_inventory_items',
+        'stock_shipments', 'expenses', 'investments', 'cash_adjustments',
+        'perfumes', 'custom_inventory_stock_entries', 'custom_inventory_items',
         'custom_inventory_categories',
       ];
       for (const table of tablesToReset) {

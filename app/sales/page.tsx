@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import {
   Perfume,
@@ -225,6 +225,8 @@ function SaleModal({
     setAmountPaid(recordAsDebt ? '0' : String(totalAmount));
   }, [totalAmount, recordAsDebt]);
 
+  const itemsContainerRef = useRef<HTMLDivElement>(null);
+
   const addItem = () => {
     setItems([
       ...items,
@@ -237,6 +239,9 @@ function SaleModal({
         unit_price: 0,
       },
     ]);
+    requestAnimationFrame(() => {
+      itemsContainerRef.current?.scrollTo({ top: itemsContainerRef.current.scrollHeight, behavior: 'smooth' });
+    });
   };
 
   const removeItem = (index: number) => {
@@ -275,6 +280,8 @@ function SaleModal({
     setItems(newItems);
   };
 
+  const [saving, setSaving] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (items.length === 0) {
@@ -282,6 +289,7 @@ function SaleModal({
       return;
     }
 
+    setSaving(true);
     try {
       const response = await fetch('/api/sales', {
         method: 'POST',
@@ -310,11 +318,13 @@ function SaleModal({
     } catch (error) {
       console.error('Error creating sale:', error);
       alert('Failed to create sale');
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black bg-opacity-50 p-4">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black bg-opacity-50 p-4">
       <div className="my-8 w-full max-w-4xl rounded-lg bg-white p-6">
         <h2 className="mb-4 text-2xl font-bold text-gray-900">New Sale</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -366,7 +376,7 @@ function SaleModal({
               </button>
             </div>
 
-            <div className="max-h-96 space-y-3 overflow-y-auto">
+            <div ref={itemsContainerRef} className="max-h-96 space-y-3 overflow-y-auto">
               {items.map((item, index) => {
                 const perfumeId = Number(item.perfume_id) || 0;
                 const availableStocks = stocks.filter((s) => Number(s.perfume_id) === perfumeId);
@@ -515,8 +525,12 @@ function SaleModal({
             >
               Cancel
             </button>
-            <button type="submit" className="flex-1 rounded-lg bg-purple-600 px-4 py-2 text-white hover:bg-purple-700">
-              Complete Sale
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 rounded-lg bg-purple-600 px-4 py-2 text-white hover:bg-purple-700 disabled:opacity-60"
+            >
+              {saving ? 'Saving...' : 'Complete Sale'}
             </button>
           </div>
         </form>

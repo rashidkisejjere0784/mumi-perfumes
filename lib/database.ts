@@ -346,6 +346,18 @@ class MySqlAdapter implements DatabaseAdapter {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
 
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS cash_adjustments (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        type VARCHAR(50) NOT NULL,
+        previous_amount DOUBLE NOT NULL,
+        new_amount DOUBLE NOT NULL,
+        adjustment DOUBLE NOT NULL,
+        reason VARCHAR(500) NULL,
+        adjusted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
     // Indexes (ignore duplicates)
     const indexes = [
       'CREATE INDEX idx_stock_shipments_date ON stock_shipments(purchase_date)',

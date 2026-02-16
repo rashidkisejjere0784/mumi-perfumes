@@ -8,11 +8,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const includeAuto = searchParams.get('include_auto') === 'true';
     const db = getDatabase();
-    try {
-      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
-    } catch (_) {
-      // Column already exists
-    }
 
     const query = includeAuto
       ? `SELECT * FROM investments ORDER BY investment_date DESC, id DESC`
@@ -69,11 +64,6 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = getDatabase();
-    try {
-      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
-    } catch (_) {
-      // Column already exists
-    }
 
     const investment = await db.prepare('SELECT id, source_shipment_id FROM investments WHERE id = ?').get(id) as {
       id: number;

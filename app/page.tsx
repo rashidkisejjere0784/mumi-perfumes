@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DollarSign, TrendingUp, Wallet, Package, FlaskConical, ShoppingBag } from 'lucide-react';
+import { DollarSign, TrendingUp, Wallet, Package, FlaskConical, ShoppingBag, Settings2 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import type { FinancialSummary, SalesStats } from '@/lib/types';
 import {
@@ -45,19 +45,136 @@ function StatCard({
   value,
   icon: Icon,
   color = 'bg-blue-50',
+  onAdjust,
 }: {
   title: string;
   value: string;
   icon: React.ComponentType<{ className?: string }>;
   color?: string;
+  onAdjust?: () => void;
 }) {
   return (
     <div className={`rounded-xl border border-gray-200 p-4 md:p-5 ${color}`}>
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-gray-900">{title}</p>
-        <Icon className="h-5 w-5 text-gray-700" />
+        <div className="flex items-center gap-1">
+          {onAdjust && (
+            <button
+              onClick={onAdjust}
+              title={`Adjust ${title}`}
+              className="rounded p-1 text-gray-500 hover:bg-white/60 hover:text-gray-800"
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
+          )}
+          <Icon className="h-5 w-5 text-gray-700" />
+        </div>
       </div>
       <p className="mt-3 text-xl font-bold text-gray-900 md:text-2xl">{value}</p>
+    </div>
+  );
+}
+
+function AdjustmentModal({
+  title,
+  currentValue,
+  type,
+  onClose,
+  onSuccess,
+}: {
+  title: string;
+  currentValue: number;
+  type: 'liquid_cash' | 'capital';
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [newAmount, setNewAmount] = useState(String(currentValue));
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/adjustments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type,
+          new_amount: parseFloat(newAmount) || 0,
+          reason: reason.trim() || null,
+        }),
+      });
+      if (res.ok) {
+        onSuccess();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to save adjustment');
+      }
+    } catch (err) {
+      console.error('Adjustment error:', err);
+      alert('Failed to save adjustment');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const diff = (parseFloat(newAmount) || 0) - currentValue;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 className="mb-1 text-lg font-bold text-gray-900">Adjust {title}</h2>
+        <p className="mb-4 text-sm text-gray-500">
+          Current value: <span className="font-semibold text-gray-800">UGX {currentValue.toLocaleString()}</span>
+        </p>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">New Amount (UGX)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              value={newAmount}
+              onChange={(e) => setNewAmount(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-900 focus:ring-2 focus:ring-purple-500"
+            />
+            {!Number.isNaN(diff) && diff !== 0 && (
+              <p className={`mt-1 text-sm font-medium ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {diff > 0 ? '+' : ''}
+                {diff.toLocaleString()} adjustment
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Reason (optional)</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Physical cash count correction"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-900 focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 rounded-lg bg-purple-600 px-4 py-2 text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {submitting ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -69,47 +186,52 @@ export default function DashboardPage() {
   const [monthlyChart, setMonthlyChart] = useState<MonthlyChartRow[]>([]);
   const [profitExpenseChart, setProfitExpenseChart] = useState<ProfitExpenseRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [adjustModal, setAdjustModal] = useState<{
+    type: 'liquid_cash' | 'capital';
+    title: string;
+    currentValue: number;
+  } | null>(null);
+
+  const loadDashboard = async () => {
+    try {
+      setLoading(true);
+      const [financialRes, salesRes, dailyRes, monthlyRes, profitExpenseRes] = await Promise.all([
+        fetch('/api/dashboard/financial'),
+        fetch('/api/dashboard/sales-stats'),
+        fetch('/api/dashboard/charts?type=daily&days=30'),
+        fetch('/api/dashboard/charts?type=monthly&months=12'),
+        fetch('/api/dashboard/charts?type=profit-expense'),
+      ]);
+
+      if (financialRes.ok) {
+        const data = (await financialRes.json()) as FinancialSummary;
+        setFinancial(data);
+      }
+
+      if (salesRes.ok) {
+        const data = (await salesRes.json()) as SalesStats;
+        setSalesStats(data);
+      }
+
+      if (dailyRes.ok) {
+        setDailyChart((await dailyRes.json()) as DailyChartRow[]);
+      }
+
+      if (monthlyRes.ok) {
+        setMonthlyChart((await monthlyRes.json()) as MonthlyChartRow[]);
+      }
+
+      if (profitExpenseRes.ok) {
+        setProfitExpenseChart((await profitExpenseRes.json()) as ProfitExpenseRow[]);
+      }
+    } catch (error) {
+      console.error('Failed to load dashboard:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadDashboard = async () => {
-      try {
-        setLoading(true);
-        const [financialRes, salesRes, dailyRes, monthlyRes, profitExpenseRes] = await Promise.all([
-          fetch('/api/dashboard/financial'),
-          fetch('/api/dashboard/sales-stats'),
-          fetch('/api/dashboard/charts?type=daily&days=30'),
-          fetch('/api/dashboard/charts?type=monthly&months=12'),
-          fetch('/api/dashboard/charts?type=profit-expense'),
-        ]);
-
-        if (financialRes.ok) {
-          const data = (await financialRes.json()) as FinancialSummary;
-          setFinancial(data);
-        }
-
-        if (salesRes.ok) {
-          const data = (await salesRes.json()) as SalesStats;
-          setSalesStats(data);
-        }
-
-        if (dailyRes.ok) {
-          setDailyChart((await dailyRes.json()) as DailyChartRow[]);
-        }
-
-        if (monthlyRes.ok) {
-          setMonthlyChart((await monthlyRes.json()) as MonthlyChartRow[]);
-        }
-
-        if (profitExpenseRes.ok) {
-          setProfitExpenseChart((await profitExpenseRes.json()) as ProfitExpenseRow[]);
-        }
-      } catch (error) {
-        console.error('Failed to load dashboard:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadDashboard();
   }, []);
 
@@ -143,7 +265,19 @@ export default function DashboardPage() {
         <section>
           <h2 className="mb-3 text-lg font-semibold text-gray-900">Financial Overview</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Liquid Cash" value={formatCurrency(financial?.total_revenue ?? 0)} icon={Wallet} color="bg-emerald-50" />
+            <StatCard
+              title="Liquid Cash"
+              value={formatCurrency(financial?.total_revenue ?? 0)}
+              icon={Wallet}
+              color="bg-emerald-50"
+              onAdjust={() =>
+                setAdjustModal({
+                  type: 'liquid_cash',
+                  title: 'Liquid Cash',
+                  currentValue: financial?.total_revenue ?? 0,
+                })
+              }
+            />
             <StatCard title="Total Sales Amount" value={formatCurrency(financial?.total_sales_amount ?? 0)} icon={DollarSign} color="bg-blue-50" />
             <StatCard title="Total Expenses" value={formatCurrency(financial?.total_expenses ?? 0)} icon={TrendingUp} color="bg-rose-50" />
             <StatCard title="Outstanding Debts" value={formatCurrency(financial?.outstanding_debts ?? 0)} icon={DollarSign} color="bg-amber-50" />
@@ -153,7 +287,19 @@ export default function DashboardPage() {
         <section>
           <h2 className="mb-3 text-lg font-semibold text-gray-900">Investment & Profit</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Total Capital" value={formatCurrency(financial?.total_capital ?? 0)} icon={DollarSign} color="bg-fuchsia-50" />
+            <StatCard
+              title="Total Capital"
+              value={formatCurrency(financial?.total_capital ?? 0)}
+              icon={DollarSign}
+              color="bg-fuchsia-50"
+              onAdjust={() =>
+                setAdjustModal({
+                  type: 'capital',
+                  title: 'Total Capital',
+                  currentValue: financial?.total_capital ?? 0,
+                })
+              }
+            />
             <StatCard title="Total Amount Invested" value={formatCurrency(financial?.total_investment ?? 0)} icon={Wallet} color="bg-indigo-50" />
             <StatCard title="Profit From Sales" value={formatCurrency(financial?.profit_from_sales ?? 0)} icon={TrendingUp} color="bg-teal-50" />
             <StatCard title="Net Profit" value={formatCurrency(financial?.net_profit ?? 0)} icon={TrendingUp} color="bg-cyan-50" />
@@ -262,6 +408,19 @@ export default function DashboardPage() {
           </div>
         </section>
       </div>
+
+      {adjustModal && (
+        <AdjustmentModal
+          title={adjustModal.title}
+          currentValue={adjustModal.currentValue}
+          type={adjustModal.type}
+          onClose={() => setAdjustModal(null)}
+          onSuccess={() => {
+            setAdjustModal(null);
+            loadDashboard();
+          }}
+        />
+      )}
     </DashboardLayout>
   );
 }

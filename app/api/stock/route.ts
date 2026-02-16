@@ -2,16 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { CreateStockGroupRequest, StockWithDetails } from '@/lib/types';
 
-async function ensureInvestmentShipmentLink(db: ReturnType<typeof getDatabase>) {
-  try {
-    await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
-  } catch (_) {
-    // Column already exists
-  }
-}
-
 async function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipmentId: number) {
-  await ensureInvestmentShipmentLink(db);
   const shipment = await db.prepare(`
     SELECT id, shipment_name, purchase_date, funded_from, total_additional_expenses
     FROM stock_shipments
@@ -36,27 +27,6 @@ async function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>,
     FROM stock_groups
     WHERE shipment_id = ?
   `).get(shipmentId) as { total: number };
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shipment_id INTEGER,
-      item_id INTEGER NOT NULL,
-      quantity_added INTEGER NOT NULL,
-      remaining_quantity INTEGER NOT NULL,
-      unit_cost REAL NOT NULL,
-      purchase_date DATE NOT NULL,
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-      FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-    )
-  `);
-  try {
-    await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-  } catch (_) {
-    // Column already exists
-  }
 
   const customTotal = await db.prepare(`
     SELECT COALESCE(SUM(quantity_added * unit_cost), 0) as total
@@ -242,27 +212,6 @@ export async function POST(request: NextRequest) {
     // Store custom inventory stock entries under this shipment
     const customItems = custom_items || [];
     if (customItems.length > 0) {
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          shipment_id INTEGER,
-          item_id INTEGER NOT NULL,
-          quantity_added INTEGER NOT NULL,
-          remaining_quantity INTEGER NOT NULL,
-          unit_cost REAL NOT NULL,
-          purchase_date DATE NOT NULL,
-          note TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-          FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-        )
-      `);
-      try {
-        await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-      } catch (_) {
-        // Column already exists
-      }
-
       const customInsert = db.prepare(`
         INSERT INTO custom_inventory_stock_entries
         (shipment_id, item_id, quantity_added, remaining_quantity, unit_cost, purchase_date, note)
@@ -447,27 +396,6 @@ export async function PUT(request: NextRequest) {
 
       // Update custom stock entries linked to this shipment (optional)
       if (Array.isArray(custom_items)) {
-        await db.exec(`
-          CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            shipment_id INTEGER,
-            item_id INTEGER NOT NULL,
-            quantity_added INTEGER NOT NULL,
-            remaining_quantity INTEGER NOT NULL,
-            unit_cost REAL NOT NULL,
-            purchase_date DATE NOT NULL,
-            note TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-            FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-          )
-        `);
-        try {
-          await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-        } catch (_) {
-          // Column already exists
-        }
-
         const existingCustom = await db.prepare(`
           SELECT id, quantity_added, remaining_quantity
           FROM custom_inventory_stock_entries
@@ -611,32 +539,8 @@ export async function DELETE(request: NextRequest) {
         `).run(...stockIds.map((s) => s.id));
       }
 
-      // Ensure table exists for older DBs before deleting linked custom rows.
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          shipment_id INTEGER,
-          item_id INTEGER NOT NULL,
-          quantity_added INTEGER NOT NULL,
-          remaining_quantity INTEGER NOT NULL,
-          unit_cost REAL NOT NULL,
-          purchase_date DATE NOT NULL,
-          note TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-          FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-        )
-      `);
-      try {
-        await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-      } catch (_) {
-        // Column already exists
-      }
-
       await db.prepare('DELETE FROM custom_inventory_stock_entries WHERE shipment_id = ?').run(sid);
       await db.prepare('DELETE FROM stock_groups WHERE shipment_id = ?').run(sid);
-      // Remove linked (or legacy description-matched) capital investment entries.
-      await ensureInvestmentShipmentLink(db);
       await db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(sid);
       await db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${sid}%`);
       if (shipment.shipment_name) {

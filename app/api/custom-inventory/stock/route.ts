@@ -2,42 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import type { CustomInventoryStockEntry } from '@/lib/types';
 
-async function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL,
-      unit_label TEXT,
-      default_ml REAL,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shipment_id INTEGER,
-      item_id INTEGER NOT NULL,
-      quantity_added INTEGER NOT NULL,
-      remaining_quantity INTEGER NOT NULL,
-      unit_cost REAL NOT NULL,
-      purchase_date DATE NOT NULL,
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-      FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-    );
-  `);
-  try {
-    await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-  } catch (_) {
-    // Column already exists
-  }
-}
-
 export async function GET() {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
 
     const rows = await db.prepare(`
       SELECT
@@ -67,7 +34,6 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const shipmentIdRaw = body?.shipment_id;

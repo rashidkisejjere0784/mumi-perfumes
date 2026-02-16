@@ -2,66 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import type { CustomInventoryItem } from '@/lib/types';
 
-async function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS custom_inventory_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL,
-      unit_label TEXT,
-      default_ml REAL,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id INTEGER NOT NULL,
-      quantity_added INTEGER NOT NULL,
-      remaining_quantity INTEGER NOT NULL,
-      unit_cost REAL NOT NULL,
-      purchase_date DATE NOT NULL,
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-    );
-  `);
-
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('decant_bottle', 'Bottles used for decants (usually ml-based)');
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('polythene', 'Packaging polythenes');
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('packaging', 'General packaging supplies');
-
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
-    VALUES (?, ?, ?, ?, 1)
-  `).run('Decant Bottle', 'decant_bottle', 'bottle', 10);
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
-    VALUES (?, ?, ?, ?, 1)
-  `).run('Polythene', 'polythene', 'piece', null);
-}
-
 export async function GET() {
   try {
-    // By default return active items only.
-    // Use ?include_inactive=true when inactive rows are needed.
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
     const includeInactive = false;
 
     const items = await db.prepare(`
@@ -81,7 +24,6 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const name = String(body?.name || '').trim();
@@ -131,7 +73,6 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const id = Number(body?.id);
@@ -189,7 +130,6 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
     const { searchParams } = new URL(request.url);
     const id = Number(searchParams.get('id'));
 

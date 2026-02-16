@@ -1578,6 +1578,7 @@ function StockModal({ perfumes, customItems, stock, onClose, onSuccess }: {
   }[]>([{ item_id: '', quantity_added: '', unit_cost: '' }]);
 
   const isViewMode = stock !== null;
+  const [saving, setSaving] = useState(false);
 
   const addItem = () => {
     setItems([...items, { perfume_id: '', quantity: '', buying_cost_per_bottle: '' }]);
@@ -1624,31 +1625,32 @@ function StockModal({ perfumes, customItems, stock, onClose, onSuccess }: {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const perfumePayload = items
+      .filter((item) => item.perfume_id && item.quantity && item.buying_cost_per_bottle)
+      .map((item) => ({
+        perfume_id: parseInt(item.perfume_id),
+        quantity: parseInt(item.quantity),
+        buying_cost_per_bottle: parseFloat(item.buying_cost_per_bottle),
+      }))
+      .filter((item) => item.perfume_id && item.quantity > 0 && item.buying_cost_per_bottle >= 0);
+
+    const customPayload = customStockItems
+      .filter((item) => item.item_id && item.quantity_added)
+      .map((item) => ({
+        item_id: parseInt(item.item_id),
+        quantity_added: parseInt(item.quantity_added),
+        unit_cost: parseFloat(item.unit_cost),
+        note: shipmentName ? `Stock record: ${shipmentName}` : '',
+      }))
+      .filter((item) => item.item_id && item.quantity_added > 0 && !Number.isNaN(item.unit_cost) && item.unit_cost >= 0);
+
+    if (perfumePayload.length === 0 && customPayload.length === 0) {
+      alert('Add at least one perfume item or one custom inventory item to stock.');
+      return;
+    }
+
+    setSaving(true);
     try {
-      const perfumePayload = items
-        .filter((item) => item.perfume_id && item.quantity && item.buying_cost_per_bottle)
-        .map((item) => ({
-          perfume_id: parseInt(item.perfume_id),
-          quantity: parseInt(item.quantity),
-          buying_cost_per_bottle: parseFloat(item.buying_cost_per_bottle),
-        }))
-        .filter((item) => item.perfume_id && item.quantity > 0 && item.buying_cost_per_bottle >= 0);
-
-      const customPayload = customStockItems
-        .filter((item) => item.item_id && item.quantity_added)
-        .map((item) => ({
-          item_id: parseInt(item.item_id),
-          quantity_added: parseInt(item.quantity_added),
-          unit_cost: parseFloat(item.unit_cost),
-          note: shipmentName ? `Stock record: ${shipmentName}` : '',
-        }))
-        .filter((item) => item.item_id && item.quantity_added > 0 && !Number.isNaN(item.unit_cost) && item.unit_cost >= 0);
-
-      if (perfumePayload.length === 0 && customPayload.length === 0) {
-        alert('Add at least one perfume item or one custom inventory item to stock.');
-        return;
-      }
-
       const response = await fetch('/api/stock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1672,6 +1674,8 @@ function StockModal({ perfumes, customItems, stock, onClose, onSuccess }: {
     } catch (error) {
       console.error('Error recording stock:', error);
       alert('Failed to record stock');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1972,9 +1976,10 @@ function StockModal({ perfumes, customItems, stock, onClose, onSuccess }: {
             {!isViewMode && (
               <button
                 type="submit"
-                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                disabled={saving}
+                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-60"
               >
-                Add Shipment
+                {saving ? 'Saving...' : 'Add Shipment'}
               </button>
             )}
           </div>

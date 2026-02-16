@@ -2,44 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import type { CustomInventoryCategory } from '@/lib/types';
 
-async function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS custom_inventory_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL,
-      unit_label TEXT,
-      default_ml REAL,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('decant_bottle', 'Bottles used for decants (usually ml-based)');
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('polythene', 'Packaging polythenes');
-  await db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('packaging', 'General packaging supplies');
-}
-
 export async function GET() {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
     const rows = await db.prepare(`
       SELECT *
       FROM custom_inventory_categories
@@ -56,7 +21,6 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
     const body = await request.json();
     const name = String(body?.name || '').trim().toLowerCase();
     const description = String(body?.description || '').trim() || null;
@@ -90,7 +54,6 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const db = getDatabase();
-    await ensureCustomInventorySchema(db);
     const { searchParams } = new URL(request.url);
     const id = Number(searchParams.get('id'));
     if (!id || Number.isNaN(id)) {

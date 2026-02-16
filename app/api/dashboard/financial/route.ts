@@ -17,24 +17,6 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getDatabase();
-    try {
-      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
-    } catch (_) {
-      // Column already exists
-    }
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        shipment_id INTEGER,
-        item_id INTEGER NOT NULL,
-        quantity_added INTEGER NOT NULL,
-        remaining_quantity INTEGER NOT NULL,
-        unit_cost REAL NOT NULL,
-        purchase_date DATE NOT NULL,
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
 
     const salesData = await db.prepare(
       `SELECT
@@ -106,8 +88,21 @@ export async function GET(request: NextRequest) {
       profitFromSales += profit;
     }
 
-    const liquidCash = Number(salesData.cash_received || 0) - Number(expensesData.total || 0);
-    const totalCapital = Number(manualInvestments.total || 0);
+    // Manual adjustments (resets)
+    const liquidCashAdj = await db.prepare(
+      "SELECT COALESCE(SUM(adjustment), 0) as total FROM cash_adjustments WHERE type = 'liquid_cash'",
+    ).get() as { total: number };
+    const capitalAdj = await db.prepare(
+      "SELECT COALESCE(SUM(adjustment), 0) as total FROM cash_adjustments WHERE type = 'capital'",
+    ).get() as { total: number };
+
+    const liquidCash =
+      Number(salesData.cash_received || 0) -
+      Number(expensesData.total || 0) +
+      Number(liquidCashAdj.total || 0);
+    const totalCapital =
+      Number(manualInvestments.total || 0) +
+      Number(capitalAdj.total || 0);
     // Total Investment = all money put into stock (capital-funded + sales-funded).
     // Using amountInvestedInStock directly avoids double-counting with totalCapital.
     const totalInvestment = amountInvestedInStock;
