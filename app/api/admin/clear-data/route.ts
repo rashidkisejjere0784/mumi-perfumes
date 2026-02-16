@@ -19,24 +19,24 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDatabase();
-    const clearAll = db.transaction(() => {
-      db.prepare('DELETE FROM sale_items').run();
-      db.prepare('DELETE FROM debt_payments').run();
-      db.prepare('DELETE FROM sales').run();
-      db.prepare('DELETE FROM decant_bottle_logs').run();
-      db.prepare('DELETE FROM decant_tracking').run();
-      db.prepare('DELETE FROM deleted_bottles').run();
-      db.prepare('DELETE FROM custom_inventory_stock_entries').run();
-      db.prepare('DELETE FROM custom_inventory_items').run();
-      db.prepare('DELETE FROM custom_inventory_categories').run();
-      db.prepare('DELETE FROM stock_groups').run();
-      db.prepare('DELETE FROM stock_shipments').run();
-      db.prepare('DELETE FROM expenses').run();
-      db.prepare('DELETE FROM investments').run();
-      db.prepare('DELETE FROM perfumes').run();
+    await db.transaction(async () => {
+      await db.prepare('DELETE FROM sale_items').run();
+      await db.prepare('DELETE FROM debt_payments').run();
+      await db.prepare('DELETE FROM sales').run();
+      await db.prepare('DELETE FROM decant_bottle_logs').run();
+      await db.prepare('DELETE FROM decant_tracking').run();
+      await db.prepare('DELETE FROM deleted_bottles').run();
+      await db.prepare('DELETE FROM custom_inventory_stock_entries').run();
+      await db.prepare('DELETE FROM custom_inventory_items').run();
+      await db.prepare('DELETE FROM custom_inventory_categories').run();
+      await db.prepare('DELETE FROM stock_groups').run();
+      await db.prepare('DELETE FROM stock_shipments').run();
+      await db.prepare('DELETE FROM expenses').run();
+      await db.prepare('DELETE FROM investments').run();
+      await db.prepare('DELETE FROM perfumes').run();
 
       // Reset autoincrement counters for wiped tables (users intentionally preserved).
-      db.prepare(`
+      await db.prepare(`
         DELETE FROM sqlite_sequence
         WHERE name IN (
           'sale_items', 'debt_payments', 'sales', 'decant_bottle_logs',
@@ -48,7 +48,6 @@ export async function POST(request: NextRequest) {
       `).run();
     });
 
-    clearAll();
     return NextResponse.json({ message: 'All business data cleared successfully. Users were preserved.' });
   } catch (error) {
     console.error('Error clearing business data:', error);

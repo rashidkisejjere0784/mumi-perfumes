@@ -18,11 +18,11 @@ export async function GET(request: NextRequest) {
 
     const db = getDatabase();
     try {
-      db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
+      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
     } catch (_) {
       // Column already exists
     }
-    db.exec(`
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         shipment_id INTEGER,
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       )
     `);
 
-    const salesData = db.prepare(
+    const salesData = await db.prepare(
       `SELECT
         COALESCE(SUM(total_amount), 0) as total,
         COALESCE(SUM(CASE WHEN DATE(sale_date) = DATE('now') THEN amount_paid ELSE 0 END), 0) as daily,
@@ -45,28 +45,28 @@ export async function GET(request: NextRequest) {
       FROM sales ${dateFilter}`,
     ).get(...params) as { total: number; daily: number; monthly: number; cash_received: number };
 
-    const expensesData = db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses`).get() as { total: number };
+    const expensesData = await db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses`).get() as { total: number };
 
     // Capital = manual cash top-ups only.
-    const manualInvestments = db.prepare(`
+    const manualInvestments = await db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as total
       FROM investments
       WHERE source_shipment_id IS NULL
         AND description NOT LIKE 'Stock purchase (capital)%'
     `).get() as { total: number };
 
-    const debtData = db.prepare(`SELECT COALESCE(SUM(debt_amount), 0) as total FROM sales WHERE debt_amount > 0`).get() as { total: number };
+    const debtData = await db.prepare(`SELECT COALESCE(SUM(debt_amount), 0) as total FROM sales WHERE debt_amount > 0`).get() as { total: number };
 
     // Money currently put into stock.
-    const perfumeStockData = db.prepare(`
+    const perfumeStockData = await db.prepare(`
       SELECT COALESCE(SUM(subtotal_cost), 0) as total
       FROM stock_groups
     `).get() as { total: number };
-    const customStockData = db.prepare(`
+    const customStockData = await db.prepare(`
       SELECT COALESCE(SUM(quantity_added * unit_cost), 0) as total
       FROM custom_inventory_stock_entries
     `).get() as { total: number };
-    const shipmentExpenseData = db.prepare(`
+    const shipmentExpenseData = await db.prepare(`
       SELECT COALESCE(SUM(total_additional_expenses), 0) as total
       FROM stock_shipments
     `).get() as { total: number };
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
       Number(customStockData.total || 0) +
       Number(shipmentExpenseData.total || 0);
 
-    const soldItems = db.prepare(
+    const soldItems = await db.prepare(
       `SELECT
          si.id,
          si.stock_group_id,

@@ -12,7 +12,7 @@ export async function GET() {
     }
 
     const db = getDatabase();
-    const user = db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users WHERE id = ?').get(currentUser.userId) as User | undefined;
+    const user = await db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users WHERE id = ?').get(currentUser.userId) as User | undefined;
 
     if (!user) {
       return NextResponse.json({ user: null });

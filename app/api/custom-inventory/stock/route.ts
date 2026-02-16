@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import type { CustomInventoryStockEntry } from '@/lib/types';
 
-function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
-  db.exec(`
+async function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS custom_inventory_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -28,7 +28,7 @@ function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
     );
   `);
   try {
-    db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
+    await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
   } catch (_) {
     // Column already exists
   }
@@ -37,9 +37,9 @@ function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
 export async function GET() {
   try {
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
 
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT
         s.*,
         i.name as item_name,
@@ -67,7 +67,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const shipmentIdRaw = body?.shipment_id;
@@ -96,18 +96,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'shipment_id must be a valid positive number' }, { status: 400 });
     }
 
-    const item = db.prepare('SELECT id FROM custom_inventory_items WHERE id = ?').get(itemId);
+    const item = await db.prepare('SELECT id FROM custom_inventory_items WHERE id = ?').get(itemId);
     if (!item) {
       return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
     }
 
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO custom_inventory_stock_entries
       (shipment_id, item_id, quantity_added, remaining_quantity, unit_cost, purchase_date, note)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(shipmentId, itemId, quantity, quantity, unitCost, purchaseDate, note);
 
-    const created = db.prepare(`
+    const created = await db.prepare(`
       SELECT
         s.*,
         i.name as item_name,

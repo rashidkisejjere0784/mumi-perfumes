@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import type { CustomInventoryItem } from '@/lib/types';
 
-function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
-  db.exec(`
+async function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS custom_inventory_categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -33,24 +33,24 @@ function ensureCustomInventorySchema(db: ReturnType<typeof getDatabase>) {
     );
   `);
 
-  db.prepare(`
+  await db.prepare(`
     INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
     VALUES (?, ?, 1)
   `).run('decant_bottle', 'Bottles used for decants (usually ml-based)');
-  db.prepare(`
+  await db.prepare(`
     INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
     VALUES (?, ?, 1)
   `).run('polythene', 'Packaging polythenes');
-  db.prepare(`
+  await db.prepare(`
     INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
     VALUES (?, ?, 1)
   `).run('packaging', 'General packaging supplies');
 
-  db.prepare(`
+  await db.prepare(`
     INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
     VALUES (?, ?, ?, ?, 1)
   `).run('Decant Bottle', 'decant_bottle', 'bottle', 10);
-  db.prepare(`
+  await db.prepare(`
     INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
     VALUES (?, ?, ?, ?, 1)
   `).run('Polythene', 'polythene', 'piece', null);
@@ -61,10 +61,10 @@ export async function GET() {
     // By default return active items only.
     // Use ?include_inactive=true when inactive rows are needed.
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
     const includeInactive = false;
 
-    const items = db.prepare(`
+    const items = await db.prepare(`
       SELECT *
       FROM custom_inventory_items
       ${includeInactive ? '' : 'WHERE is_active = 1'}
@@ -81,7 +81,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const name = String(body?.name || '').trim();
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'name and category are required' }, { status: 400 });
     }
 
-    const validCategory = db.prepare(`
+    const validCategory = await db.prepare(`
       SELECT id
       FROM custom_inventory_categories
       WHERE name = ? AND is_active = 1
@@ -109,9 +109,9 @@ export async function POST(request: NextRequest) {
       INSERT INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
       VALUES (?, ?, ?, ?, 1)
     `);
-    const result = stmt.run(name, category, unitLabel, defaultMl);
+    const result = await stmt.run(name, category, unitLabel, defaultMl);
 
-    const created = db.prepare(`
+    const created = await db.prepare(`
       SELECT *
       FROM custom_inventory_items
       WHERE id = ?
@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
 
     const body = await request.json();
     const id = Number(body?.id);
@@ -149,7 +149,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'name and category are required' }, { status: 400 });
     }
 
-    const validCategory = db.prepare(`
+    const validCategory = await db.prepare(`
       SELECT id
       FROM custom_inventory_categories
       WHERE name = ? AND is_active = 1
@@ -158,13 +158,13 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Selected category does not exist' }, { status: 400 });
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE custom_inventory_items
       SET name = ?, category = ?, unit_label = ?, default_ml = ?
       WHERE id = ?
     `).run(name, category, unitLabel, defaultMl, id);
 
-    const updated = db.prepare(`
+    const updated = await db.prepare(`
       SELECT *
       FROM custom_inventory_items
       WHERE id = ?
@@ -187,7 +187,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const db = getDatabase();
-    ensureCustomInventorySchema(db);
+    await ensureCustomInventorySchema(db);
     const { searchParams } = new URL(request.url);
     const id = Number(searchParams.get('id'));
 
@@ -195,13 +195,13 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Valid id is required' }, { status: 400 });
     }
 
-    const existing = db.prepare('SELECT id FROM custom_inventory_items WHERE id = ?').get(id) as { id: number } | undefined;
+    const existing = await db.prepare('SELECT id FROM custom_inventory_items WHERE id = ?').get(id) as { id: number } | undefined;
     if (!existing) {
       return NextResponse.json({ error: 'Item not found' }, { status: 404 });
     }
 
     // Soft delete to preserve historical stock rows.
-    db.prepare('UPDATE custom_inventory_items SET is_active = 0 WHERE id = ?').run(id);
+    await db.prepare('UPDATE custom_inventory_items SET is_active = 0 WHERE id = ?').run(id);
 
     return NextResponse.json({ message: 'Item deleted successfully' });
   } catch (error) {

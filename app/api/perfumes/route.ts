@@ -6,7 +6,7 @@ import { CreatePerfumeRequest, Perfume } from '@/lib/types';
 export async function GET() {
   try {
     const db = getDatabase();
-    const perfumes = db.prepare('SELECT * FROM perfumes ORDER BY name').all() as Perfume[];
+    const perfumes = await db.prepare('SELECT * FROM perfumes ORDER BY name').all() as Perfume[];
     return NextResponse.json(perfumes);
   } catch (error) {
     console.error('Error fetching perfumes:', error);
@@ -28,9 +28,9 @@ export async function POST(request: NextRequest) {
     const stmt = db.prepare(
       'INSERT INTO perfumes (name, volume_ml, estimated_decants_per_bottle) VALUES (?, ?, ?)'
     );
-    const result = stmt.run(name, volume_ml, estimated_decants_per_bottle);
+    const result = await stmt.run(name, volume_ml, estimated_decants_per_bottle);
 
-    const newPerfume = db.prepare('SELECT * FROM perfumes WHERE id = ?').get(result.lastInsertRowid) as Perfume;
+    const newPerfume = await db.prepare('SELECT * FROM perfumes WHERE id = ?').get(result.lastInsertRowid) as Perfume;
 
     return NextResponse.json(newPerfume, { status: 201 });
   } catch (error: any) {
@@ -61,7 +61,7 @@ export async function PUT(request: NextRequest) {
            is_out_of_stock = COALESCE(?, is_out_of_stock)
        WHERE id = ?`
     );
-    stmt.run(
+    await stmt.run(
       name ?? null,
       volume_ml ?? null,
       estimated_decants_per_bottle ?? null,
@@ -69,7 +69,7 @@ export async function PUT(request: NextRequest) {
       id
     );
 
-    const updatedPerfume = db.prepare('SELECT * FROM perfumes WHERE id = ?').get(id) as Perfume;
+    const updatedPerfume = await db.prepare('SELECT * FROM perfumes WHERE id = ?').get(id) as Perfume;
 
     return NextResponse.json(updatedPerfume);
   } catch (error) {
@@ -91,13 +91,13 @@ export async function DELETE(request: NextRequest) {
     const db = getDatabase();
     
     // Check if perfume has stock or sales
-    const stockCount = db.prepare('SELECT COUNT(*) as count FROM stock_groups WHERE perfume_id = ?').get(id) as { count: number };
+    const stockCount = await db.prepare('SELECT COUNT(*) as count FROM stock_groups WHERE perfume_id = ?').get(id) as { count: number };
     if (stockCount.count > 0) {
       return NextResponse.json({ error: 'Cannot delete perfume with existing stock' }, { status: 400 });
     }
 
     const stmt = db.prepare('DELETE FROM perfumes WHERE id = ?');
-    stmt.run(id);
+    await stmt.run(id);
 
     return NextResponse.json({ message: 'Perfume deleted successfully' });
   } catch (error) {

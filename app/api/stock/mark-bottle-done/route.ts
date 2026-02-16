@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
 
     const db = getDatabase();
 
-    const stock = db.prepare(`
+    const stock = await db.prepare(`
       SELECT sg.id, sg.quantity, sg.perfume_id, dt.decants_sold, dt.bottles_sold, dt.bottles_done
       FROM stock_groups sg
       LEFT JOIN decant_tracking dt ON dt.stock_group_id = sg.id
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const aggregatedLogs = db.prepare(`
+    const aggregatedLogs = await db.prepare(`
       SELECT
         COALESCE(SUM(decants_obtained), 0) as total_decants,
         COALESCE(MAX(bottle_sequence), 0) as max_seq
@@ -58,13 +58,13 @@ export async function POST(request: NextRequest) {
     }
 
     const nextSequence = (aggregatedLogs.max_seq || 0) + 1;
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO decant_bottle_logs
       (stock_group_id, perfume_id, bottle_sequence, decants_obtained, completion_source)
       VALUES (?, ?, ?, ?, 'manual')
     `).run(stock_group_id, stock.perfume_id, nextSequence, decantsObtained);
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE decant_tracking
       SET bottles_done = bottles_done + 1
       WHERE stock_group_id = ?

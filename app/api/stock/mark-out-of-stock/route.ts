@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDatabase();
-    const stock = db.prepare(`
+    const stock = await db.prepare(`
       SELECT id, perfume_id, remaining_quantity
       FROM stock_groups
       WHERE id = ?
@@ -35,13 +35,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE stock_groups
       SET remaining_quantity = remaining_quantity - ?
       WHERE id = ?
     `).run(quantity, stock_group_id);
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO deleted_bottles
       (stock_group_id, perfume_id, quantity_removed, reason, note)
       VALUES (?, ?, ?, ?, ?)

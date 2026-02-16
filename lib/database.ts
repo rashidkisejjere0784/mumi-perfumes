@@ -1,33 +1,41 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import mysql from 'mysql2/promise';
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
-const SyncMySQL = require('sync-mysql');
+/* ── Types ── */
 
 type RunResult = { lastInsertRowid: number; changes: number };
-type PreparedStatement = {
-  get: (...params: any[]) => any;
-  all: (...params: any[]) => any[];
-  run: (...params: any[]) => RunResult;
+
+export type PreparedStatement = {
+  get: (...params: any[]) => Promise<any>;
+  all: (...params: any[]) => Promise<any[]>;
+  run: (...params: any[]) => Promise<RunResult>;
 };
 
 export type DatabaseAdapter = {
   prepare: (sql: string) => PreparedStatement;
-  exec: (sql: string) => void;
-  transaction: <T>(fn: () => T) => () => T;
-  pragma: (value: string) => void;
-  close: () => void;
+  exec: (sql: string) => Promise<void>;
+  transaction: <T>(fn: () => Promise<T>) => Promise<T>;
+  close: () => Promise<void>;
 };
 
-let db: DatabaseAdapter | null = null;
+/* ── SQL helpers ── */
 
-function toMySqlSyntax(sql: string): string {
+function toMySql(sql: string): string {
   return sql
-    .replace(/INSERT\s+OR\s+IGNORE/gi, 'INSERT IGNORE')
     .replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'BIGINT AUTO_INCREMENT PRIMARY KEY')
-    .replace(/\bINTEGER\b/gi, 'BIGINT')
-    .replace(/strftime\('%Y-%m',\s*([^)]+)\)/gi, "DATE_FORMAT($1, '%Y-%m')")
+    .replace(/INSERT\s+OR\s+IGNORE/gi, 'INSERT IGNORE')
+    .replace(/strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)/gi, "DATE_FORMAT($1, '%Y-%m')")
+    // date('now', '-N months') → DATE_SUB(CURDATE(), INTERVAL N MONTH)
+    .replace(/date\('now'\s*,\s*'-(\d+)\s+months?'\)/gi, 'DATE_SUB(CURDATE(), INTERVAL $1 MONTH)')
+    // date('now', '-N days') → DATE_SUB(CURDATE(), INTERVAL N DAY)
+    .replace(/date\('now'\s*,\s*'-(\d+)\s+days?'\)/gi, 'DATE_SUB(CURDATE(), INTERVAL $1 DAY)')
     .replace(/DATE\('now'\)/gi, 'CURDATE()')
+    // Fix 'now' string literal inside DATE_FORMAT (from strftime conversion)
+    .replace(/DATE_FORMAT\(\s*'now'/gi, 'DATE_FORMAT(NOW()')
     .replace(/\bREAL\b/gi, 'DOUBLE')
+    .replace(/\bTEXT\s+NOT\s+NULL\s+UNIQUE/gi, 'VARCHAR(255) NOT NULL UNIQUE')
+    .replace(/\bTEXT\s+NOT\s+NULL\s+DEFAULT\s+/gi, 'VARCHAR(255) NOT NULL DEFAULT ')
+    .replace(/\bTEXT\s+NOT\s+NULL\s+CHECK\s*\(/gi, 'VARCHAR(100) NOT NULL CHECK(')
     .replace(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS/gi, 'CREATE INDEX');
 }
 
@@ -38,40 +46,61 @@ function splitStatements(sql: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-class MySqlAdapter implements DatabaseAdapter {
-  private conn: any;
+/* ── MySQL Adapter ── */
 
-  constructor(databaseUrl: string) {
-    const parsed = new URL(databaseUrl);
-    this.conn = new SyncMySQL({
+class MySqlAdapter implements DatabaseAdapter {
+  private pool: Pool;
+  private _initDone = false;
+  private _initPromise: Promise<void> | null = null;
+  private _txConn: PoolConnection | null = null;
+
+  constructor(url: string) {
+    const parsed = new URL(url);
+    this.pool = mysql.createPool({
       host: parsed.hostname,
       port: Number(parsed.port || 3306),
       user: decodeURIComponent(parsed.username),
       password: decodeURIComponent(parsed.password),
       database: parsed.pathname.replace(/^\//, ''),
       charset: 'utf8mb4',
-      // Intentionally ignore ssl-mode query param as requested.
-      ssl: false,
+      waitForConnections: true,
+      connectionLimit: 10,
+      ssl: undefined,
     });
   }
 
-  pragma() {
-    // No-op for MySQL
+  private async ensureInit() {
+    if (this._initDone) return;
+    if (!this._initPromise) {
+      this._initPromise = this._doInit();
+    }
+    await this._initPromise;
+    this._initDone = true;
   }
 
+  private conn(): Pool | PoolConnection {
+    return this._txConn || this.pool;
+  }
+
+  /* ── public interface ── */
+
   prepare(sql: string): PreparedStatement {
-    const transformed = toMySqlSyntax(sql);
+    const self = this;
+    const transformed = toMySql(sql);
     return {
-      get: (...params: any[]) => {
-        const rows = this.conn.query(transformed, params);
-        return Array.isArray(rows) ? rows[0] : undefined;
+      async get(...params: any[]) {
+        await self.ensureInit();
+        const [rows] = await self.conn().execute<RowDataPacket[]>(transformed, params);
+        return rows[0] ?? undefined;
       },
-      all: (...params: any[]) => {
-        const rows = this.conn.query(transformed, params);
-        return Array.isArray(rows) ? rows : [];
+      async all(...params: any[]) {
+        await self.ensureInit();
+        const [rows] = await self.conn().execute<RowDataPacket[]>(transformed, params);
+        return rows as any[];
       },
-      run: (...params: any[]) => {
-        const result = this.conn.query(transformed, params) || {};
+      async run(...params: any[]) {
+        await self.ensureInit();
+        const [result] = await self.conn().execute<ResultSetHeader>(transformed, params);
         return {
           lastInsertRowid: Number(result.insertId || 0),
           changes: Number(result.affectedRows || 0),
@@ -80,411 +109,327 @@ class MySqlAdapter implements DatabaseAdapter {
     };
   }
 
-  exec(sql: string) {
-    const statements = splitStatements(toMySqlSyntax(sql));
-    for (const stmt of statements) {
+  async exec(sql: string) {
+    await this.ensureInit();
+    const stmts = splitStatements(toMySql(sql));
+    for (const s of stmts) {
       try {
-        this.conn.query(stmt);
-      } catch (error: any) {
-        // Ignore duplicate index errors for idempotent init SQL.
-        if (error?.code === 'ER_DUP_KEYNAME') {
-          continue;
-        }
-        throw error;
+        await this.conn().query(s);
+      } catch (err: any) {
+        if (err?.code === 'ER_DUP_KEYNAME' || err?.code === 'ER_DUP_FIELDNAME') continue;
+        throw err;
       }
     }
   }
 
-  transaction<T>(fn: () => T) {
-    return () => {
-      this.conn.query('START TRANSACTION');
-      try {
-        const result = fn();
-        this.conn.query('COMMIT');
-        return result;
-      } catch (error) {
-        this.conn.query('ROLLBACK');
-        throw error;
-      }
-    };
-  }
-
-  close() {
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    await this.ensureInit();
+    const c = await this.pool.getConnection();
+    this._txConn = c;
+    await c.beginTransaction();
     try {
-      this.conn.dispose?.();
-    } catch (_) {
-      // no-op
+      const result = await fn();
+      await c.commit();
+      return result;
+    } catch (err) {
+      await c.rollback();
+      throw err;
+    } finally {
+      this._txConn = null;
+      c.release();
+    }
+  }
+
+  async close() {
+    await this.pool.end();
+  }
+
+  /* ── internal: schema init (uses pool directly, no ensureInit guard) ── */
+
+  private async _doInit() {
+    const p = this.pool;
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL DEFAULT 'user',
+        is_active INT NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS perfumes (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        volume_ml INT NOT NULL,
+        estimated_decants_per_bottle INT NOT NULL,
+        is_out_of_stock INT NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS stock_shipments (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        shipment_name VARCHAR(255) NULL,
+        transport_cost DOUBLE DEFAULT 0,
+        other_expenses DOUBLE DEFAULT 0,
+        total_additional_expenses DOUBLE DEFAULT 0,
+        purchase_date DATE NOT NULL,
+        funded_from VARCHAR(50) NOT NULL DEFAULT 'sales',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS stock_groups (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        shipment_id BIGINT NOT NULL,
+        perfume_id BIGINT NOT NULL,
+        quantity INT NOT NULL,
+        buying_cost_per_bottle DOUBLE NOT NULL,
+        subtotal_cost DOUBLE NOT NULL,
+        remaining_quantity INT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
+        FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS sales (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        customer_name VARCHAR(255) NULL,
+        payment_method VARCHAR(100) NOT NULL,
+        total_amount DOUBLE NOT NULL,
+        amount_paid DOUBLE NOT NULL,
+        debt_amount DOUBLE DEFAULT 0,
+        sale_date DATE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS sale_items (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        sale_id BIGINT NOT NULL,
+        perfume_id BIGINT NOT NULL,
+        stock_group_id BIGINT NOT NULL,
+        sale_type VARCHAR(100) NOT NULL,
+        quantity INT NOT NULL,
+        unit_price DOUBLE NOT NULL,
+        subtotal DOUBLE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sale_id) REFERENCES sales(id),
+        FOREIGN KEY (perfume_id) REFERENCES perfumes(id),
+        FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS decant_tracking (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        stock_group_id BIGINT NOT NULL,
+        perfume_id BIGINT NOT NULL,
+        decants_sold INT NOT NULL DEFAULT 0,
+        bottles_sold INT NOT NULL DEFAULT 0,
+        bottles_done INT NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_decant_stock (stock_group_id),
+        FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
+        FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS decant_bottle_logs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        stock_group_id BIGINT NOT NULL,
+        perfume_id BIGINT NOT NULL,
+        bottle_sequence INT NOT NULL,
+        decants_obtained INT NOT NULL,
+        completion_source VARCHAR(50) NOT NULL,
+        completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
+        FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS deleted_bottles (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        stock_group_id BIGINT NOT NULL,
+        perfume_id BIGINT NOT NULL,
+        quantity_removed INT NOT NULL DEFAULT 1,
+        reason VARCHAR(255) NOT NULL DEFAULT 'out_of_stock',
+        note TEXT NULL,
+        removed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
+        FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS custom_inventory_categories (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        description TEXT NULL,
+        is_active INT NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS custom_inventory_items (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        category VARCHAR(255) NOT NULL,
+        unit_label VARCHAR(100) NULL,
+        default_ml DOUBLE NULL,
+        is_active INT NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        shipment_id BIGINT NULL,
+        item_id BIGINT NOT NULL,
+        quantity_added INT NOT NULL,
+        remaining_quantity INT NOT NULL,
+        unit_cost DOUBLE NOT NULL,
+        purchase_date DATE NOT NULL,
+        note TEXT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
+        FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS debt_payments (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        sale_id BIGINT NOT NULL,
+        amount_paid DOUBLE NOT NULL,
+        payment_date DATE NOT NULL,
+        payment_method VARCHAR(100) NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sale_id) REFERENCES sales(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS expenses (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        description VARCHAR(500) NOT NULL,
+        amount DOUBLE NOT NULL,
+        category VARCHAR(255) NULL,
+        expense_date DATE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS investments (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        description VARCHAR(500) NOT NULL,
+        amount DOUBLE NOT NULL,
+        investment_date DATE NOT NULL,
+        source_shipment_id BIGINT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    // Indexes (ignore duplicates)
+    const indexes = [
+      'CREATE INDEX idx_stock_shipments_date ON stock_shipments(purchase_date)',
+      'CREATE INDEX idx_stock_groups_shipment ON stock_groups(shipment_id)',
+      'CREATE INDEX idx_stock_groups_perfume ON stock_groups(perfume_id)',
+      'CREATE INDEX idx_sales_date ON sales(sale_date)',
+      'CREATE INDEX idx_sale_items_sale ON sale_items(sale_id)',
+      'CREATE INDEX idx_sale_items_perfume ON sale_items(perfume_id)',
+      'CREATE INDEX idx_debt_payments_sale ON debt_payments(sale_id)',
+      'CREATE INDEX idx_expenses_date ON expenses(expense_date)',
+      'CREATE INDEX idx_investments_source ON investments(source_shipment_id)',
+      'CREATE INDEX idx_decant_logs_stock ON decant_bottle_logs(stock_group_id)',
+      'CREATE INDEX idx_deleted_bottles_stock ON deleted_bottles(stock_group_id)',
+      'CREATE INDEX idx_deleted_bottles_at ON deleted_bottles(removed_at)',
+      'CREATE INDEX idx_ci_categories_name ON custom_inventory_categories(name)',
+      'CREATE INDEX idx_ci_items_category ON custom_inventory_items(category)',
+      'CREATE INDEX idx_ci_stock_item ON custom_inventory_stock_entries(item_id)',
+      'CREATE INDEX idx_ci_stock_shipment ON custom_inventory_stock_entries(shipment_id)',
+      'CREATE INDEX idx_ci_stock_date ON custom_inventory_stock_entries(purchase_date)',
+    ];
+    for (const idx of indexes) {
+      try { await p.query(idx); } catch (e: any) { if (e?.code !== 'ER_DUP_KEYNAME') throw e; }
+    }
+
+    // Seed default categories
+    await p.execute(
+      `INSERT IGNORE INTO custom_inventory_categories (name, description, is_active) VALUES (?, ?, 1)`,
+      ['decant_bottle', 'Bottles used for decants (usually ml-based)'],
+    );
+    await p.execute(
+      `INSERT IGNORE INTO custom_inventory_categories (name, description, is_active) VALUES (?, ?, 1)`,
+      ['polythene', 'Packaging polythenes'],
+    );
+    await p.execute(
+      `INSERT IGNORE INTO custom_inventory_categories (name, description, is_active) VALUES (?, ?, 1)`,
+      ['packaging', 'General packaging supplies'],
+    );
+
+    // Seed default custom inventory items
+    await p.execute(
+      `INSERT IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active) VALUES (?, ?, ?, ?, 1)`,
+      ['Decant Bottle', 'decant_bottle', 'bottle', 10],
+    );
+    await p.execute(
+      `INSERT IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active) VALUES (?, ?, ?, ?, 1)`,
+      ['Polythene', 'polythene', 'piece', null],
+    );
+
+    // Create default admin user if none exist
+    const [rows] = await p.execute<RowDataPacket[]>('SELECT COUNT(*) as count FROM users');
+    const count = Number(rows[0]?.count || 0);
+    if (count === 0) {
+      const bcrypt = require('bcryptjs');
+      const username = (process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim();
+      const password = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+      const fullName = (process.env.DEFAULT_ADMIN_FULL_NAME || 'Administrator').trim();
+      const role = (process.env.DEFAULT_ADMIN_ROLE || 'admin').trim();
+      const hash = bcrypt.hashSync(password, 10);
+      await p.execute(
+        'INSERT INTO users (username, password_hash, full_name, role) VALUES (?, ?, ?, ?)',
+        [username, hash, fullName, role],
+      );
+      console.log(`✓ Default admin user created (username: ${username})`);
     }
   }
 }
 
-class SqliteAdapter implements DatabaseAdapter {
-  constructor(private readonly sqlite: Database.Database) {}
+/* ── Singleton ── */
 
-  pragma(value: string) {
-    this.sqlite.pragma(value);
-  }
-
-  prepare(sql: string): PreparedStatement {
-    const stmt = this.sqlite.prepare(sql);
-    return {
-      get: (...params: any[]) => stmt.get(...params),
-      all: (...params: any[]) => stmt.all(...params) as any[],
-      run: (...params: any[]) => {
-        const result = stmt.run(...params);
-        return {
-          lastInsertRowid: Number(result.lastInsertRowid || 0),
-          changes: Number(result.changes || 0),
-        };
-      },
-    };
-  }
-
-  exec(sql: string) {
-    this.sqlite.exec(sql);
-  }
-
-  transaction<T>(fn: () => T) {
-    return this.sqlite.transaction(fn) as () => T;
-  }
-
-  close() {
-    this.sqlite.close();
-  }
-}
+let adapter: MySqlAdapter | null = null;
 
 export function getDatabase(): DatabaseAdapter {
-  if (!db) {
-    const databaseUrl = process.env.DATABASE_URL?.trim();
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    if (isProduction) {
-      if (!databaseUrl) {
-        throw new Error('DATABASE_URL is required in production.');
-      }
-      if (!databaseUrl.startsWith('mysql://')) {
-        throw new Error('Production DATABASE_URL must be a mysql:// URL.');
-      }
-      db = new MySqlAdapter(databaseUrl);
-    } else if (databaseUrl && databaseUrl.startsWith('mysql://')) {
-      // Allow using dedicated MySQL in non-production too.
-      db = new MySqlAdapter(databaseUrl);
-    } else {
-      // Non-production fallback for local development.
-      const dbPath = path.join(process.cwd(), 'mumi_perfumes.db');
-      const sqlite = new Database(dbPath);
-      db = new SqliteAdapter(sqlite);
-      db.pragma('journal_mode = WAL');
-    }
-    initializeDatabase(db);
+  if (!adapter) {
+    const url = process.env.DATABASE_URL?.trim();
+    if (!url) throw new Error('DATABASE_URL environment variable is required.');
+    if (!url.startsWith('mysql://')) throw new Error('DATABASE_URL must be a mysql:// URL.');
+    adapter = new MySqlAdapter(url);
   }
-  return db;
+  return adapter;
 }
 
-function initializeDatabase(db: DatabaseAdapter) {
-  // Create users table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      full_name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_login DATETIME
-    )
-  `);
-
-  // Create perfumes table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS perfumes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      volume_ml INTEGER NOT NULL,
-      estimated_decants_per_bottle INTEGER NOT NULL,
-      is_out_of_stock INTEGER NOT NULL DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  try {
-    db.exec(`ALTER TABLE perfumes ADD COLUMN is_out_of_stock INTEGER NOT NULL DEFAULT 0`);
-  } catch (_) {
-    // Column already exists
-  }
-
-  // Create stock_shipments table - tracks bulk purchases/shipments
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS stock_shipments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shipment_name TEXT,
-      transport_cost REAL DEFAULT 0,
-      other_expenses REAL DEFAULT 0,
-      total_additional_expenses REAL DEFAULT 0,
-      purchase_date DATE NOT NULL,
-      funded_from TEXT NOT NULL DEFAULT 'sales',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  try {
-    db.exec(`ALTER TABLE stock_shipments ADD COLUMN funded_from TEXT DEFAULT 'sales'`);
-  } catch (_) {
-    // Column already exists (e.g. table was created with funded_from)
-  }
-
-  // Create stock_groups table - tracks individual perfumes in each shipment
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS stock_groups (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shipment_id INTEGER NOT NULL,
-      perfume_id INTEGER NOT NULL,
-      quantity INTEGER NOT NULL,
-      buying_cost_per_bottle REAL NOT NULL,
-      subtotal_cost REAL NOT NULL,
-      remaining_quantity INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-      FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
-    )
-  `);
-
-  // Create sales table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sales (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      customer_name TEXT,
-      payment_method TEXT NOT NULL,
-      total_amount REAL NOT NULL,
-      amount_paid REAL NOT NULL,
-      debt_amount REAL DEFAULT 0,
-      sale_date DATE NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Create sale_items table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sale_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sale_id INTEGER NOT NULL,
-      perfume_id INTEGER NOT NULL,
-      stock_group_id INTEGER NOT NULL,
-      sale_type TEXT NOT NULL CHECK(sale_type IN ('full_bottle', 'decant')),
-      quantity INTEGER NOT NULL,
-      unit_price REAL NOT NULL,
-      subtotal REAL NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (sale_id) REFERENCES sales(id),
-      FOREIGN KEY (perfume_id) REFERENCES perfumes(id),
-      FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id)
-    )
-  `);
-
-  // Create decant_tracking table - tracks actual decants sold per stock group
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS decant_tracking (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      stock_group_id INTEGER NOT NULL,
-      perfume_id INTEGER NOT NULL,
-      decants_sold INTEGER NOT NULL DEFAULT 0,
-      bottles_sold INTEGER NOT NULL DEFAULT 0,
-      bottles_done INTEGER NOT NULL DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
-      FOREIGN KEY (perfume_id) REFERENCES perfumes(id),
-      UNIQUE(stock_group_id)
-    )
-  `);
-  try {
-    db.exec(`ALTER TABLE decant_tracking ADD COLUMN bottles_done INTEGER NOT NULL DEFAULT 0`);
-  } catch (_) {
-    // Column already exists
-  }
-
-  // Tracks completed bottles from decanting (auto at 10 decants or manual mark)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS decant_bottle_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      stock_group_id INTEGER NOT NULL,
-      perfume_id INTEGER NOT NULL,
-      bottle_sequence INTEGER NOT NULL,
-      decants_obtained INTEGER NOT NULL,
-      completion_source TEXT NOT NULL CHECK(completion_source IN ('auto', 'manual')),
-      completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
-      FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
-    )
-  `);
-
-  // Tracks bottles removed from inventory as out-of-stock/damaged/etc.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS deleted_bottles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      stock_group_id INTEGER NOT NULL,
-      perfume_id INTEGER NOT NULL,
-      quantity_removed INTEGER NOT NULL DEFAULT 1,
-      reason TEXT NOT NULL DEFAULT 'out_of_stock',
-      note TEXT,
-      removed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (stock_group_id) REFERENCES stock_groups(id),
-      FOREIGN KEY (perfume_id) REFERENCES perfumes(id)
-    )
-  `);
-
-  // Custom inventory items (e.g. decant bottles, polythenes, user-defined items)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL,
-      unit_label TEXT,
-      default_ml REAL,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Stock entries for custom inventory items
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shipment_id INTEGER,
-      item_id INTEGER NOT NULL,
-      quantity_added INTEGER NOT NULL,
-      remaining_quantity INTEGER NOT NULL,
-      unit_cost REAL NOT NULL,
-      purchase_date DATE NOT NULL,
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (shipment_id) REFERENCES stock_shipments(id),
-      FOREIGN KEY (item_id) REFERENCES custom_inventory_items(id)
-    )
-  `);
-  try {
-    db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
-  } catch (_) {
-    // Column already exists
-  }
-
-  // Create debt_payments table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS debt_payments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sale_id INTEGER NOT NULL,
-      amount_paid REAL NOT NULL,
-      payment_date DATE NOT NULL,
-      payment_method TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (sale_id) REFERENCES sales(id)
-    )
-  `);
-
-  // Create expenses table - for additional business expenses
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS expenses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      description TEXT NOT NULL,
-      amount REAL NOT NULL,
-      category TEXT,
-      expense_date DATE NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Create investments table - manual investment tracking
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS investments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      description TEXT NOT NULL,
-      amount REAL NOT NULL,
-      investment_date DATE NOT NULL,
-      source_shipment_id INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  try {
-    db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
-  } catch (_) {
-    // Column already exists
-  }
-
-  // Create indexes for better query performance
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-    CREATE INDEX IF NOT EXISTS idx_stock_shipments_date ON stock_shipments(purchase_date);
-    CREATE INDEX IF NOT EXISTS idx_stock_groups_shipment ON stock_groups(shipment_id);
-    CREATE INDEX IF NOT EXISTS idx_stock_groups_perfume ON stock_groups(perfume_id);
-    CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date);
-    CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
-    CREATE INDEX IF NOT EXISTS idx_sale_items_perfume ON sale_items(perfume_id);
-    CREATE INDEX IF NOT EXISTS idx_debt_payments_sale ON debt_payments(sale_id);
-    CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
-    CREATE INDEX IF NOT EXISTS idx_investments_source_shipment ON investments(source_shipment_id);
-    CREATE INDEX IF NOT EXISTS idx_decant_bottle_logs_stock ON decant_bottle_logs(stock_group_id);
-    CREATE INDEX IF NOT EXISTS idx_deleted_bottles_stock ON deleted_bottles(stock_group_id);
-    CREATE INDEX IF NOT EXISTS idx_deleted_bottles_removed_at ON deleted_bottles(removed_at);
-    CREATE INDEX IF NOT EXISTS idx_custom_inventory_categories_name ON custom_inventory_categories(name);
-    CREATE INDEX IF NOT EXISTS idx_custom_inventory_items_category ON custom_inventory_items(category);
-    CREATE INDEX IF NOT EXISTS idx_custom_inventory_stock_item ON custom_inventory_stock_entries(item_id);
-    CREATE INDEX IF NOT EXISTS idx_custom_inventory_stock_shipment ON custom_inventory_stock_entries(shipment_id);
-    CREATE INDEX IF NOT EXISTS idx_custom_inventory_stock_date ON custom_inventory_stock_entries(purchase_date);
-  `);
-
-  db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('decant_bottle', 'Bottles used for decants (usually ml-based)');
-  db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('polythene', 'Packaging polythenes');
-  db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_categories (name, description, is_active)
-    VALUES (?, ?, 1)
-  `).run('packaging', 'General packaging supplies');
-
-  // Seed required custom inventory items if missing
-  db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
-    VALUES (?, ?, ?, ?, 1)
-  `).run('Decant Bottle', 'decant_bottle', 'bottle', 10);
-
-  db.prepare(`
-    INSERT OR IGNORE INTO custom_inventory_items (name, category, unit_label, default_ml, is_active)
-    VALUES (?, ?, ?, ?, 1)
-  `).run('Polythene', 'polythene', 'piece', null);
-
-  // Create default admin user if no users exist.
-  // Credentials are configurable via env and fall back to admin/admin123.
-  const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
-  if (userCount.count === 0) {
-    const bcrypt = require('bcryptjs');
-    const defaultUsername = (process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim();
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
-    const defaultFullName = (process.env.DEFAULT_ADMIN_FULL_NAME || 'Administrator').trim();
-    const defaultRole = (process.env.DEFAULT_ADMIN_ROLE || 'admin').trim();
-    const defaultPasswordHash = bcrypt.hashSync(defaultPassword, 10);
-    db.prepare(`
-      INSERT INTO users (username, password_hash, full_name, role)
-      VALUES (?, ?, ?, ?)
-    `).run(defaultUsername, defaultPasswordHash, defaultFullName, defaultRole);
-    console.log(`✓ Default admin user created (username: ${defaultUsername})`);
-  }
-}
-
-export function closeDatabase() {
-  if (db) {
-    db.close();
-    db = null;
+export async function closeDatabase(): Promise<void> {
+  if (adapter) {
+    await adapter.close();
+    adapter = null;
   }
 }

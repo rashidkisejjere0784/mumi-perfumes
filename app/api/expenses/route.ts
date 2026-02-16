@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
 
     query += ' ORDER BY expense_date DESC';
 
-    const expenses = db.prepare(query).all(...params);
+    const expenses = await db.prepare(query).all(...params);
     return NextResponse.json(expenses);
   } catch (error) {
     console.error('Error fetching expenses:', error);
@@ -43,9 +43,9 @@ export async function POST(request: NextRequest) {
       INSERT INTO expenses (description, amount, category, expense_date)
       VALUES (?, ?, ?, ?)
     `);
-    const result = stmt.run(description, amount, category || null, expense_date);
+    const result = await stmt.run(description, amount, category || null, expense_date);
 
-    const expense = db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
+    const expense = await db.prepare('SELECT * FROM expenses WHERE id = ?').get(result.lastInsertRowid);
 
     return NextResponse.json(expense, { status: 201 });
   } catch (error) {
@@ -66,7 +66,7 @@ export async function DELETE(request: NextRequest) {
 
     const db = getDatabase();
     const stmt = db.prepare('DELETE FROM expenses WHERE id = ?');
-    stmt.run(id);
+    await stmt.run(id);
 
     return NextResponse.json({ message: 'Expense deleted successfully' });
   } catch (error) {

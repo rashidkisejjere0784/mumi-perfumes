@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       params.push(startDate, endDate);
     }
     
-    const totalSales = db.prepare(totalSalesQuery).get(...params) as { total: number };
+    const totalSales = await db.prepare(totalSalesQuery).get(...params) as { total: number };
 
     // Full bottle vs decant sales
     let salesByTypeQuery = `
@@ -41,24 +41,24 @@ export async function GET(request: NextRequest) {
     
     salesByTypeQuery += ' GROUP BY sale_type';
     
-    const salesByType = db.prepare(salesByTypeQuery).all(...params) as { sale_type: string; count: number; revenue: number }[];
+    const salesByType = await db.prepare(salesByTypeQuery).all(...params) as { sale_type: string; count: number; revenue: number }[];
 
     const fullBottleSales = salesByType.find(s => s.sale_type === 'full_bottle')?.count || 0;
     const decantSales = salesByType.find(s => s.sale_type === 'decant')?.count || 0;
 
     // Inventory/sold units stats
-    const fullBottlesSoldRow = db.prepare(`
+    const fullBottlesSoldRow = await db.prepare(`
       SELECT COALESCE(SUM(bottles_sold), 0) as total
       FROM decant_tracking
     `).get() as { total: number };
 
-    const decantsSoldRow = db.prepare(`
+    const decantsSoldRow = await db.prepare(`
       SELECT COALESCE(SUM(decants_sold), 0) as total
       FROM decant_tracking
     `).get() as { total: number };
 
     // Full bottles available: exclude perfumes that already started decanting
-    const fullBottlesAvailableRow = db.prepare(`
+    const fullBottlesAvailableRow = await db.prepare(`
       SELECT COALESCE(SUM(sg.remaining_quantity), 0) as total
       FROM stock_groups sg
       LEFT JOIN perfumes p ON p.id = sg.perfume_id
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
     `).get() as { total: number };
 
     // Decants available estimate: baseline 10 per unsold bottle minus decants already sold
-    const decantsAvailableRow = db.prepare(`
+    const decantsAvailableRow = await db.prepare(`
       SELECT COALESCE(SUM(
         CASE
           WHEN ((sg.quantity - COALESCE(dt.bottles_sold, 0)) * 10) - COALESCE(dt.decants_sold, 0) > 0
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
       LIMIT 10
     `;
     
-    const bestSelling = db.prepare(bestSellingQuery).all(...params);
+    const bestSelling = await db.prepare(bestSellingQuery).all(...params);
 
     const stats: SalesStats = {
       total_sales: totalSales.total,

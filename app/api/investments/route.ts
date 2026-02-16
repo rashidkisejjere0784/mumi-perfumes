@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
     const includeAuto = searchParams.get('include_auto') === 'true';
     const db = getDatabase();
     try {
-      db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
+      await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
     } catch (_) {
       // Column already exists
     }
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
         ORDER BY investment_date DESC, id DESC
       `;
 
-    const investments = db.prepare(query).all();
+    const investments = await db.prepare(query).all();
     return NextResponse.json(investments);
   } catch (error) {
     console.error('Error fetching investments:', error);
@@ -47,9 +47,9 @@ export async function POST(request: NextRequest) {
       INSERT INTO investments (description, amount, investment_date)
       VALUES (?, ?, ?)
     `);
-    const result = stmt.run(description, amount, investment_date);
+    const result = await stmt.run(description, amount, investment_date);
 
-    const investment = db.prepare('SELECT * FROM investments WHERE id = ?').get(result.lastInsertRowid);
+    const investment = await db.prepare('SELECT * FROM investments WHERE id = ?').get(result.lastInsertRowid);
 
     return NextResponse.json(investment, { status: 201 });
   } catch (error) {

@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
     // Chronological order so we apply cost recovery in time order
     query += ' ORDER BY s.sale_date ASC, s.id ASC, si.id ASC';
 
-    const rows = db.prepare(query).all(...params) as Row[];
+    const rows = await db.prepare(query).all(...params) as Row[];
 
     // Per stock group: how much of the stock cost has been recovered so far (by earlier sales)
     const costRecoveredByStock = new Map<number, number>();

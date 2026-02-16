@@ -5,7 +5,7 @@ import type { DeletedBottleRecord } from '@/lib/types';
 export async function GET() {
   try {
     const db = getDatabase();
-    const deleted = db.prepare(`
+    const deleted = await db.prepare(`
       SELECT
         db.id,
         db.stock_group_id,

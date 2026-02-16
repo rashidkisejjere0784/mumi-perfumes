@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getDatabase();
-    const payments = db.prepare('SELECT * FROM debt_payments WHERE sale_id = ? ORDER BY payment_date DESC').all(saleId);
+    const payments = await db.prepare('SELECT * FROM debt_payments WHERE sale_id = ? ORDER BY payment_date DESC').all(saleId);
 
     return NextResponse.json(payments);
   } catch (error) {
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     const db = getDatabase();
 
     // Get current debt amount
-    const sale = db.prepare('SELECT debt_amount FROM sales WHERE id = ?').get(sale_id) as { debt_amount: number } | undefined;
+    const sale = await db.prepare('SELECT debt_amount FROM sales WHERE id = ?').get(sale_id) as { debt_amount: number } | undefined;
     
     if (!sale) {
       return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       INSERT INTO debt_payments (sale_id, amount_paid, payment_date, payment_method)
       VALUES (?, ?, ?, ?)
     `);
-    const result = insertPayment.run(sale_id, amount_paid, payment_date, payment_method);
+    const result = await insertPayment.run(sale_id, amount_paid, payment_date, payment_method);
 
     // Update sale debt amount and amount paid
     const updateSale = db.prepare(`
@@ -59,9 +59,9 @@ export async function POST(request: NextRequest) {
           amount_paid = amount_paid + ?
       WHERE id = ?
     `);
-    updateSale.run(amount_paid, amount_paid, sale_id);
+    await updateSale.run(amount_paid, amount_paid, sale_id);
 
-    const payment = db.prepare('SELECT * FROM debt_payments WHERE id = ?').get(result.lastInsertRowid);
+    const payment = await db.prepare('SELECT * FROM debt_payments WHERE id = ?').get(result.lastInsertRowid);
 
     return NextResponse.json(payment, { status: 201 });
   } catch (error) {

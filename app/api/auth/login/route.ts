@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getDatabase();
-    const user = db.prepare('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username) as User | undefined;
+    const user = await db.prepare('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username) as User | undefined;
 
     if (!user) {
       return NextResponse.json(
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Update last login
-    db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
+    await db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
 
     // Generate token
     const token = generateToken({

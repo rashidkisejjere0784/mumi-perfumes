@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
     if (type === 'daily') {
       // Get daily revenue for the last N days
-      const dailyData = db.prepare(`
+      const dailyData = await db.prepare(`
         SELECT 
           sale_date as date,
           SUM(amount_paid) as revenue,
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(dailyData);
     } else if (type === 'monthly') {
       // Get monthly revenue for the last N months
-      const monthlyData = db.prepare(`
+      const monthlyData = await db.prepare(`
         SELECT 
           strftime('%Y-%m', sale_date) as month,
           SUM(amount_paid) as revenue,
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(monthlyData);
     } else if (type === 'profit-expense') {
       // Get profit vs expense comparison by month
-      const profitExpenseData = db.prepare(`
+      const profitExpenseData = await db.prepare(`
         SELECT 
           strftime('%Y-%m', sale_date) as month,
           SUM(amount_paid) as revenue
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
       `).all();
 
       // Get expenses by month
-      const expenseData = db.prepare(`
+      const expenseData = await db.prepare(`
         SELECT 
           strftime('%Y-%m', expense_date) as month,
           SUM(amount) as expenses

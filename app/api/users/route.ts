@@ -14,7 +14,7 @@ export async function GET() {
     }
 
     const db = getDatabase();
-    const users = db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC').all() as User[];
+    const users = await db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC').all() as User[];
 
     return NextResponse.json(users);
   } catch (error) {
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     const db = getDatabase();
 
     // Check if username already exists
-    const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+    const existingUser = await db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existingUser) {
       return NextResponse.json({ error: 'Username already exists' }, { status: 400 });
     }
@@ -50,12 +50,12 @@ export async function POST(request: NextRequest) {
     const passwordHash = await bcrypt.hash(password, 10);
 
     // Insert user
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO users (username, password_hash, full_name, role)
       VALUES (?, ?, ?, ?)
     `).run(username, passwordHash, full_name, role || 'user');
 
-    const newUser = db.prepare('SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?').get(result.lastInsertRowid) as User;
+    const newUser = await db.prepare('SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?').get(result.lastInsertRowid) as User;
 
     return NextResponse.json(newUser, { status: 201 });
   } catch (error) {
@@ -88,7 +88,7 @@ export async function PUT(request: NextRequest) {
 
     if (password) {
       const passwordHash = await bcrypt.hash(password, 10);
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id);
+      await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id);
     }
 
     if (username || full_name || role !== undefined || is_active !== undefined) {
@@ -114,11 +114,11 @@ export async function PUT(request: NextRequest) {
 
       if (updates.length > 0) {
         values.push(id);
-        db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+        await db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
       }
     }
 
-    const updatedUser = db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users WHERE id = ?').get(id) as User;
+    const updatedUser = await db.prepare('SELECT id, username, full_name, role, is_active, created_at, last_login FROM users WHERE id = ?').get(id) as User;
 
     return NextResponse.json(updatedUser);
   } catch (error) {
@@ -149,7 +149,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const db = getDatabase();
-    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    await db.prepare('DELETE FROM users WHERE id = ?').run(id);
 
     return NextResponse.json({ message: 'User deleted successfully' });
   } catch (error) {

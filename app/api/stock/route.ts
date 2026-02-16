@@ -2,17 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { CreateStockGroupRequest, StockWithDetails } from '@/lib/types';
 
-function ensureInvestmentShipmentLink(db: ReturnType<typeof getDatabase>) {
+async function ensureInvestmentShipmentLink(db: ReturnType<typeof getDatabase>) {
   try {
-    db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
+    await db.exec(`ALTER TABLE investments ADD COLUMN source_shipment_id INTEGER`);
   } catch (_) {
     // Column already exists
   }
 }
 
-function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipmentId: number) {
-  ensureInvestmentShipmentLink(db);
-  const shipment = db.prepare(`
+async function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipmentId: number) {
+  await ensureInvestmentShipmentLink(db);
+  const shipment = await db.prepare(`
     SELECT id, shipment_name, purchase_date, funded_from, total_additional_expenses
     FROM stock_shipments
     WHERE id = ?
@@ -26,18 +26,18 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
 
   if (!shipment) {
     // If shipment no longer exists, remove linked investment rows.
-    db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(shipmentId);
-    db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${shipmentId}%`);
+    await db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(shipmentId);
+    await db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${shipmentId}%`);
     return;
   }
 
-  const perfumeTotal = db.prepare(`
+  const perfumeTotal = await db.prepare(`
     SELECT COALESCE(SUM(subtotal_cost), 0) as total
     FROM stock_groups
     WHERE shipment_id = ?
   `).get(shipmentId) as { total: number };
 
-  db.exec(`
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       shipment_id INTEGER,
@@ -53,12 +53,12 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
     )
   `);
   try {
-    db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
+    await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
   } catch (_) {
     // Column already exists
   }
 
-  const customTotal = db.prepare(`
+  const customTotal = await db.prepare(`
     SELECT COALESCE(SUM(quantity_added * unit_cost), 0) as total
     FROM custom_inventory_stock_entries
     WHERE shipment_id = ?
@@ -70,10 +70,10 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
     Number(shipment.total_additional_expenses || 0);
 
   if (shipment.funded_from !== 'capital' || totalShipmentCost <= 0) {
-    db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(shipmentId);
-    db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${shipmentId}%`);
+    await db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(shipmentId);
+    await db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${shipmentId}%`);
     if (shipment.shipment_name) {
-      db.prepare(`DELETE FROM investments WHERE description = ?`).run(`Stock purchase (capital) - ${shipment.shipment_name}`);
+      await db.prepare(`DELETE FROM investments WHERE description = ?`).run(`Stock purchase (capital) - ${shipment.shipment_name}`);
     }
     return;
   }
@@ -82,7 +82,7 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
     ? `Stock purchase (capital) - ${shipment.shipment_name}`
     : `Stock purchase (capital) - Shipment #${shipmentId}`;
 
-  const existing = db.prepare(`
+  const existing = await db.prepare(`
     SELECT id
     FROM investments
     WHERE source_shipment_id = ?
@@ -90,13 +90,13 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
   `).get(shipmentId) as { id: number } | undefined;
 
   if (existing) {
-    db.prepare(`
+    await db.prepare(`
       UPDATE investments
       SET description = ?, amount = ?, investment_date = ?
       WHERE id = ?
     `).run(desc, totalShipmentCost, shipment.purchase_date, existing.id);
   } else {
-    const legacy = db.prepare(`
+    const legacy = await db.prepare(`
       SELECT id
       FROM investments
       WHERE source_shipment_id IS NULL
@@ -106,13 +106,13 @@ function syncShipmentCapitalInvestment(db: ReturnType<typeof getDatabase>, shipm
     `).get(desc, `%Shipment #${shipmentId}%`) as { id: number } | undefined;
 
     if (legacy) {
-      db.prepare(`
+      await db.prepare(`
         UPDATE investments
         SET description = ?, amount = ?, investment_date = ?, source_shipment_id = ?
         WHERE id = ?
       `).run(desc, totalShipmentCost, shipment.purchase_date, shipmentId, legacy.id);
     } else {
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO investments (description, amount, investment_date, source_shipment_id)
         VALUES (?, ?, ?, ?)
       `).run(desc, totalShipmentCost, shipment.purchase_date, shipmentId);
@@ -152,11 +152,11 @@ export async function GET(request: NextRequest) {
 
     if (perfumeId) {
       query += ' WHERE sg.perfume_id = ?';
-      const stocks = db.prepare(query + ' ORDER BY ss.purchase_date DESC').all(perfumeId) as StockWithDetails[];
+      const stocks = await db.prepare(query + ' ORDER BY ss.purchase_date DESC').all(perfumeId) as StockWithDetails[];
       return NextResponse.json(stocks);
     }
 
-    const stocks = db.prepare(query + ' ORDER BY ss.purchase_date DESC').all() as StockWithDetails[];
+    const stocks = await db.prepare(query + ' ORDER BY ss.purchase_date DESC').all() as StockWithDetails[];
     return NextResponse.json(stocks);
   } catch (error) {
     console.error('Error fetching stock groups:', error);
@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
       (shipment_name, transport_cost, other_expenses, total_additional_expenses, purchase_date, funded_from)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    const shipmentResult = shipmentStmt.run(
+    const shipmentResult = await shipmentStmt.run(
       shipment_name || null,
       transport_cost || 0,
       other_expenses || 0,
@@ -224,7 +224,7 @@ export async function POST(request: NextRequest) {
 
     for (const item of perfumeItems) {
       const subtotal_cost = item.quantity * item.buying_cost_per_bottle;
-      const stockResult = stockStmt.run(
+      const stockResult = await stockStmt.run(
         shipmentId,
         item.perfume_id,
         item.quantity,
@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
       );
 
       // Initialize decant tracking
-      trackStmt.run(stockResult.lastInsertRowid, item.perfume_id);
+      await trackStmt.run(stockResult.lastInsertRowid, item.perfume_id);
 
       createdStocks.push(stockResult.lastInsertRowid);
     }
@@ -242,7 +242,7 @@ export async function POST(request: NextRequest) {
     // Store custom inventory stock entries under this shipment
     const customItems = custom_items || [];
     if (customItems.length > 0) {
-      db.exec(`
+      await db.exec(`
         CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           shipment_id INTEGER,
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
         )
       `);
       try {
-        db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
+        await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
       } catch (_) {
         // Column already exists
       }
@@ -270,7 +270,7 @@ export async function POST(request: NextRequest) {
       `);
       for (const c of customItems) {
         if (!c.item_id || !c.quantity_added || c.quantity_added <= 0) continue;
-        customInsert.run(
+        await customInsert.run(
           shipmentId,
           c.item_id,
           c.quantity_added,
@@ -283,10 +283,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Keep linked capital investment in sync for this shipment.
-    syncShipmentCapitalInvestment(db, Number(shipmentId));
+    await syncShipmentCapitalInvestment(db, Number(shipmentId));
 
     // Fetch the complete shipment with all stock groups
-    const newStocks = db.prepare(`
+    const newStocks = await db.prepare(`
       SELECT 
         sg.*,
         p.name as perfume_name,
@@ -351,15 +351,15 @@ export async function PUT(request: NextRequest) {
     }
 
     const db = getDatabase();
-    const shipment = db.prepare('SELECT id FROM stock_shipments WHERE id = ?').get(shipment_id);
+    const shipment = await db.prepare('SELECT id FROM stock_shipments WHERE id = ?').get(shipment_id);
     if (!shipment) {
       return NextResponse.json({ error: 'Shipment not found' }, { status: 404 });
     }
 
     const total_additional_expenses = (Number(transport_cost) || 0) + (Number(other_expenses) || 0);
 
-    const tx = db.transaction(() => {
-      db.prepare(`
+    await db.transaction(async () => {
+      await db.prepare(`
         UPDATE stock_shipments
         SET shipment_name = ?, transport_cost = ?, other_expenses = ?, total_additional_expenses = ?, purchase_date = ?, funded_from = ?
         WHERE id = ?
@@ -373,7 +373,7 @@ export async function PUT(request: NextRequest) {
         shipment_id
       );
 
-      const existingItems = db.prepare(`
+      const existingItems = await db.prepare(`
         SELECT id, perfume_id, quantity, remaining_quantity
         FROM stock_groups
         WHERE shipment_id = ?
@@ -394,14 +394,14 @@ export async function PUT(request: NextRequest) {
       // Delete removed rows (only if no sales exist)
       for (const existing of existingItems) {
         if (!incomingIds.has(existing.id)) {
-          const salesCount = db.prepare('SELECT COUNT(*) as count FROM sale_items WHERE stock_group_id = ?').get(existing.id) as { count: number };
+          const salesCount = await db.prepare('SELECT COUNT(*) as count FROM sale_items WHERE stock_group_id = ?').get(existing.id) as { count: number };
           if (salesCount.count > 0) {
             throw new Error(`Cannot remove item ${existing.id}; it has sales records.`);
           }
-          db.prepare('DELETE FROM decant_bottle_logs WHERE stock_group_id = ?').run(existing.id);
-          db.prepare('DELETE FROM decant_tracking WHERE stock_group_id = ?').run(existing.id);
-          db.prepare('DELETE FROM deleted_bottles WHERE stock_group_id = ?').run(existing.id);
-          db.prepare('DELETE FROM stock_groups WHERE id = ?').run(existing.id);
+          await db.prepare('DELETE FROM decant_bottle_logs WHERE stock_group_id = ?').run(existing.id);
+          await db.prepare('DELETE FROM decant_tracking WHERE stock_group_id = ?').run(existing.id);
+          await db.prepare('DELETE FROM deleted_bottles WHERE stock_group_id = ?').run(existing.id);
+          await db.prepare('DELETE FROM stock_groups WHERE id = ?').run(existing.id);
         }
       }
 
@@ -422,23 +422,23 @@ export async function PUT(request: NextRequest) {
             throw new Error(`Quantity for item ${stockGroupId} cannot be less than bottles already sold (${soldBottles}).`);
           }
           const newRemaining = quantity - soldBottles;
-          db.prepare(`
+          await db.prepare(`
             UPDATE stock_groups
             SET perfume_id = ?, quantity = ?, buying_cost_per_bottle = ?, subtotal_cost = ?, remaining_quantity = ?
             WHERE id = ?
           `).run(perfumeId, quantity, cost, subtotal, newRemaining, stockGroupId);
-          db.prepare(`
+          await db.prepare(`
             UPDATE decant_tracking
             SET perfume_id = ?
             WHERE stock_group_id = ?
           `).run(perfumeId, stockGroupId);
         } else {
-          const inserted = db.prepare(`
+          const inserted = await db.prepare(`
             INSERT INTO stock_groups
             (shipment_id, perfume_id, quantity, buying_cost_per_bottle, subtotal_cost, remaining_quantity)
             VALUES (?, ?, ?, ?, ?, ?)
           `).run(shipment_id, perfumeId, quantity, cost, subtotal, quantity);
-          db.prepare(`
+          await db.prepare(`
             INSERT INTO decant_tracking (stock_group_id, perfume_id, decants_sold, bottles_sold, bottles_done)
             VALUES (?, ?, 0, 0, 0)
           `).run(inserted.lastInsertRowid, perfumeId);
@@ -447,7 +447,7 @@ export async function PUT(request: NextRequest) {
 
       // Update custom stock entries linked to this shipment (optional)
       if (Array.isArray(custom_items)) {
-        db.exec(`
+        await db.exec(`
           CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             shipment_id INTEGER,
@@ -463,12 +463,12 @@ export async function PUT(request: NextRequest) {
           )
         `);
         try {
-          db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
+          await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
         } catch (_) {
           // Column already exists
         }
 
-        const existingCustom = db.prepare(`
+        const existingCustom = await db.prepare(`
           SELECT id, quantity_added, remaining_quantity
           FROM custom_inventory_stock_entries
           WHERE shipment_id = ?
@@ -482,7 +482,7 @@ export async function PUT(request: NextRequest) {
 
         for (const existing of existingCustom) {
           if (!incomingCustomIds.has(existing.id)) {
-            db.prepare('DELETE FROM custom_inventory_stock_entries WHERE id = ?').run(existing.id);
+            await db.prepare('DELETE FROM custom_inventory_stock_entries WHERE id = ?').run(existing.id);
           }
         }
 
@@ -501,13 +501,13 @@ export async function PUT(request: NextRequest) {
               throw new Error(`Custom item quantity cannot be less than already consumed units (${consumed}).`);
             }
             const newRemaining = qty - consumed;
-            db.prepare(`
+            await db.prepare(`
               UPDATE custom_inventory_stock_entries
               SET item_id = ?, quantity_added = ?, remaining_quantity = ?, unit_cost = ?, purchase_date = ?, note = ?
               WHERE id = ?
             `).run(itemId, qty, newRemaining, unitCost, purchase_date, note, existingId);
           } else {
-            db.prepare(`
+            await db.prepare(`
               INSERT INTO custom_inventory_stock_entries
               (shipment_id, item_id, quantity_added, remaining_quantity, unit_cost, purchase_date, note)
               VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -517,12 +517,10 @@ export async function PUT(request: NextRequest) {
       }
 
       // Keep linked capital investment in sync after any shipment edit.
-      syncShipmentCapitalInvestment(db, Number(shipment_id));
+      await syncShipmentCapitalInvestment(db, Number(shipment_id));
     });
 
-    tx();
-
-    const updatedStocks = db.prepare(`
+    const updatedStocks = await db.prepare(`
       SELECT 
         sg.*,
         p.name as perfume_name,
@@ -573,12 +571,12 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({ error: 'Valid shipment_id is required' }, { status: 400 });
       }
 
-      const shipment = db.prepare('SELECT id, shipment_name FROM stock_shipments WHERE id = ?').get(sid) as { id: number; shipment_name?: string | null } | undefined;
+      const shipment = await db.prepare('SELECT id, shipment_name FROM stock_shipments WHERE id = ?').get(sid) as { id: number; shipment_name?: string | null } | undefined;
       if (!shipment) {
         return NextResponse.json({ error: 'Shipment not found' }, { status: 404 });
       }
 
-      const stockIds = db.prepare(`
+      const stockIds = await db.prepare(`
         SELECT id
         FROM stock_groups
         WHERE shipment_id = ?
@@ -586,7 +584,7 @@ export async function DELETE(request: NextRequest) {
 
       if (stockIds.length > 0) {
         const placeholders = stockIds.map(() => '?').join(',');
-        const salesCount = db.prepare(`
+        const salesCount = await db.prepare(`
           SELECT COUNT(*) as count
           FROM sale_items
           WHERE stock_group_id IN (${placeholders})
@@ -599,22 +597,22 @@ export async function DELETE(request: NextRequest) {
           );
         }
 
-        db.prepare(`
+        await db.prepare(`
           DELETE FROM decant_bottle_logs
           WHERE stock_group_id IN (${placeholders})
         `).run(...stockIds.map((s) => s.id));
-        db.prepare(`
+        await db.prepare(`
           DELETE FROM decant_tracking
           WHERE stock_group_id IN (${placeholders})
         `).run(...stockIds.map((s) => s.id));
-        db.prepare(`
+        await db.prepare(`
           DELETE FROM deleted_bottles
           WHERE stock_group_id IN (${placeholders})
         `).run(...stockIds.map((s) => s.id));
       }
 
       // Ensure table exists for older DBs before deleting linked custom rows.
-      db.exec(`
+      await db.exec(`
         CREATE TABLE IF NOT EXISTS custom_inventory_stock_entries (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           shipment_id INTEGER,
@@ -630,21 +628,21 @@ export async function DELETE(request: NextRequest) {
         )
       `);
       try {
-        db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
+        await db.exec(`ALTER TABLE custom_inventory_stock_entries ADD COLUMN shipment_id INTEGER`);
       } catch (_) {
         // Column already exists
       }
 
-      db.prepare('DELETE FROM custom_inventory_stock_entries WHERE shipment_id = ?').run(sid);
-      db.prepare('DELETE FROM stock_groups WHERE shipment_id = ?').run(sid);
+      await db.prepare('DELETE FROM custom_inventory_stock_entries WHERE shipment_id = ?').run(sid);
+      await db.prepare('DELETE FROM stock_groups WHERE shipment_id = ?').run(sid);
       // Remove linked (or legacy description-matched) capital investment entries.
-      ensureInvestmentShipmentLink(db);
-      db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(sid);
-      db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${sid}%`);
+      await ensureInvestmentShipmentLink(db);
+      await db.prepare('DELETE FROM investments WHERE source_shipment_id = ?').run(sid);
+      await db.prepare(`DELETE FROM investments WHERE description LIKE ?`).run(`%Shipment #${sid}%`);
       if (shipment.shipment_name) {
-        db.prepare(`DELETE FROM investments WHERE description = ?`).run(`Stock purchase (capital) - ${shipment.shipment_name}`);
+        await db.prepare(`DELETE FROM investments WHERE description = ?`).run(`Stock purchase (capital) - ${shipment.shipment_name}`);
       }
-      db.prepare('DELETE FROM stock_shipments WHERE id = ?').run(sid);
+      await db.prepare('DELETE FROM stock_shipments WHERE id = ?').run(sid);
 
       return NextResponse.json({ message: 'Shipment and all linked items deleted successfully' });
     }
@@ -654,27 +652,27 @@ export async function DELETE(request: NextRequest) {
     }
     
     // Check if stock has been sold
-    const salesCount = db.prepare('SELECT COUNT(*) as count FROM sale_items WHERE stock_group_id = ?').get(id) as { count: number };
+    const salesCount = await db.prepare('SELECT COUNT(*) as count FROM sale_items WHERE stock_group_id = ?').get(id) as { count: number };
     if (salesCount.count > 0) {
       return NextResponse.json({ 
         error: 'Cannot delete stock group with existing sales. This would compromise financial records.' 
       }, { status: 400 });
     }
 
-    const shipmentForStock = db.prepare('SELECT shipment_id FROM stock_groups WHERE id = ?').get(id) as { shipment_id?: number } | undefined;
+    const shipmentForStock = await db.prepare('SELECT shipment_id FROM stock_groups WHERE id = ?').get(id) as { shipment_id?: number } | undefined;
 
     // Delete dependent rows first (foreign keys)
-    db.prepare('DELETE FROM decant_tracking WHERE stock_group_id = ?').run(id);
-    db.prepare('DELETE FROM decant_bottle_logs WHERE stock_group_id = ?').run(id);
-    db.prepare('DELETE FROM deleted_bottles WHERE stock_group_id = ?').run(id);
+    await db.prepare('DELETE FROM decant_tracking WHERE stock_group_id = ?').run(id);
+    await db.prepare('DELETE FROM decant_bottle_logs WHERE stock_group_id = ?').run(id);
+    await db.prepare('DELETE FROM deleted_bottles WHERE stock_group_id = ?').run(id);
     
     // Delete stock group
     const stmt = db.prepare('DELETE FROM stock_groups WHERE id = ?');
-    stmt.run(id);
+    await stmt.run(id);
 
     // If this stock group belonged to a capital shipment, recalc linked investment amount.
     if (shipmentForStock?.shipment_id) {
-      syncShipmentCapitalInvestment(db, Number(shipmentForStock.shipment_id));
+      await syncShipmentCapitalInvestment(db, Number(shipmentForStock.shipment_id));
     }
 
     return NextResponse.json({ message: 'Stock group deleted successfully' });
