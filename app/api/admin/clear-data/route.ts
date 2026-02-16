@@ -1,0 +1,57 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getDatabase } from '@/lib/database';
+import { getCurrentUser } from '@/lib/auth';
+
+export async function POST(request: NextRequest) {
+  try {
+    const currentUser = await getCurrentUser();
+    if (!currentUser || currentUser.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const body = await request.json();
+    const confirmation = String(body?.confirmation || '');
+    if (confirmation !== 'CLEAR_ALL_DATA') {
+      return NextResponse.json(
+        { error: 'Invalid confirmation. Use CLEAR_ALL_DATA.' },
+        { status: 400 }
+      );
+    }
+
+    const db = getDatabase();
+    const clearAll = db.transaction(() => {
+      db.prepare('DELETE FROM sale_items').run();
+      db.prepare('DELETE FROM debt_payments').run();
+      db.prepare('DELETE FROM sales').run();
+      db.prepare('DELETE FROM decant_bottle_logs').run();
+      db.prepare('DELETE FROM decant_tracking').run();
+      db.prepare('DELETE FROM deleted_bottles').run();
+      db.prepare('DELETE FROM custom_inventory_stock_entries').run();
+      db.prepare('DELETE FROM custom_inventory_items').run();
+      db.prepare('DELETE FROM custom_inventory_categories').run();
+      db.prepare('DELETE FROM stock_groups').run();
+      db.prepare('DELETE FROM stock_shipments').run();
+      db.prepare('DELETE FROM expenses').run();
+      db.prepare('DELETE FROM investments').run();
+      db.prepare('DELETE FROM perfumes').run();
+
+      // Reset autoincrement counters for wiped tables (users intentionally preserved).
+      db.prepare(`
+        DELETE FROM sqlite_sequence
+        WHERE name IN (
+          'sale_items', 'debt_payments', 'sales', 'decant_bottle_logs',
+          'decant_tracking', 'deleted_bottles', 'stock_groups',
+          'stock_shipments', 'expenses', 'investments', 'perfumes',
+          'custom_inventory_stock_entries', 'custom_inventory_items',
+          'custom_inventory_categories'
+        )
+      `).run();
+    });
+
+    clearAll();
+    return NextResponse.json({ message: 'All business data cleared successfully. Users were preserved.' });
+  } catch (error) {
+    console.error('Error clearing business data:', error);
+    return NextResponse.json({ error: 'Failed to clear data' }, { status: 500 });
+  }
+}
