@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Mumi Perfumes POS system is a full-stack web application built using Next.js with server-side API routes and SQLite database. It follows a modern, scalable architecture with clear separation of concerns.
+The Mumi Perfumes POS system is a full-stack web application built using Next.js with server-side API routes and SQLite database. It follows a mode  rn, scalable architecture with clear separation of concerns.
 
 ## Architecture Diagram
 
